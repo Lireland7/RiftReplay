@@ -1,0 +1,19 @@
+# Node / Electron
+node_modules/
+dist/
+out/
+*.log
+
+# Local editor / agent settings
+.claude/
+
+# Old backups & archives (not part of the app)
+files/
+*.zip
+
+# Visual Studio
+.vs/
+bin/
+obj/
+*.user
+*.suo

@@ -1,0 +1,37 @@
+name: Release
+
+# Build the Windows .exe and attach it to a GitHub Release whenever a version
+# tag (e.g. v0.1.0) is pushed.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create/update the release and upload assets
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installer + portable exe
+        run: npm run dist
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/RiftReplay-*-portable.exe
+            dist/RiftReplay-Setup-*.exe
