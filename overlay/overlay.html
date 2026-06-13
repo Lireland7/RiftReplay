@@ -43,6 +43,16 @@
     color: var(--gold);
     font-weight: 600;
   }
+  .head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #record {
+    -webkit-app-region: no-drag;        /* keep the button clickable */
+    background: #1b2230;
+    border: 1px solid rgba(201,162,39,0.4);
+    color: var(--gold);
+    font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 4px 9px; border-radius: 6px; cursor: pointer;
+  }
+  #record:hover { background: #232c3d; }
   #champion { color: var(--dim); font-size: 12px; margin-top: 2px; }
   #stats {
     display: flex;
@@ -108,7 +118,10 @@
 <body>
 <div id="panel">
   <header>
-    <h1>RiftReplay</h1>
+    <div class="head-row">
+      <h1>RiftReplay</h1>
+      <button id="record" title="Record this game (Ctrl+Shift+R)">+ Record game</button>
+    </div>
     <div id="champion">Waiting for game…</div>
   </header>
   <div id="stats" hidden>
@@ -135,6 +148,8 @@
   let gameRemaining = null;
 
   const $ = id => document.getElementById(id);
+
+  $('record').onclick = () => window.tracker.openRecordForm();
 
   // Escape card names before interpolating into innerHTML — names come from the
   // external card DB / game DOM, so treat them as untrusted to avoid XSS.

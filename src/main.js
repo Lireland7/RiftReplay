@@ -4,14 +4,20 @@
 //   2. overlayWin — frameless, always-on-top deck tracker UI
 // All tracker events flow: game-preload --IPC--> main --IPC--> overlay.
 
-const { app, BrowserWindow, ipcMain, screen, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, session, globalShortcut } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 let gameWin = null;
 let overlayWin = null;
+let recordWin = null;
 
 // The only origin the game window is allowed to load in-app.
 const GAME_ORIGIN = 'https://tcg-arena.fr';
+
+// Match state carried across games (Bo3). Null when no match is in progress.
+let currentMatch = null;          // { id, games, carry:{…} }
+let pendingPrefill = null;        // data waiting to populate the record form
 
 function createGameWindow() {
   gameWin = new BrowserWindow({
@@ -77,6 +83,148 @@ function createOverlayWindow() {
   overlayWin.on('closed', () => { overlayWin = null; });
 }
 
+// ----------------------------------------------------- record game ---------
+function createRecordWindow() {
+  recordWin = new BrowserWindow({
+    width: 760,
+    height: 740,
+    title: 'Record Game — RiftReplay',
+    backgroundColor: '#0d1017',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'form-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  recordWin.setMenuBarVisibility(false);
+  recordWin.loadFile(path.join(__dirname, '..', 'overlay', 'record.html'));
+  recordWin.on('closed', () => { recordWin = null; });
+}
+
+// Merge auto-detected data with the in-progress match's carried fields.
+function buildPrefill(detected) {
+  const p = { ...(detected || {}) };
+  if (currentMatch) {
+    const carry = currentMatch.carry || {};
+    for (const k of ['format', 'opponent', 'seat', 'myLegend', 'oppLegend', 'deck', 'deckName']) {
+      if (carry[k]) p[k] = carry[k];
+    }
+    p.matchInProgress = true;
+    p.gameNo = currentMatch.games + 1;
+  } else {
+    p.matchInProgress = false;
+    p.gameNo = 1;
+  }
+  return p;
+}
+
+function showRecordForm(detected) {
+  // Pull the diagnostic dump out before it reaches the form, write it to disk.
+  if (detected && detected._debug) {
+    try {
+      const dir = path.join(app.getPath('documents'), 'RiftReplay');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'game-state-debug.json'),
+        JSON.stringify(detected._debug, null, 2));
+    } catch (_) {}
+    delete detected._debug;
+  }
+  pendingPrefill = buildPrefill(detected);
+  if (recordWin && !recordWin.isDestroyed()) {
+    recordWin.webContents.send('prefill', pendingPrefill);
+    recordWin.focus();
+    return;
+  }
+  createRecordWindow();
+}
+
+// Open the form, auto-detecting from the live game first if it's running.
+function openRecordForm() {
+  if (gameWin && !gameWin.isDestroyed()) {
+    gameWin.webContents.send('request-game-data'); // game-preload replies with 'game-data'
+  } else {
+    showRecordForm({});
+  }
+}
+
+ipcMain.on('open-record-form', openRecordForm);
+ipcMain.on('game-data', (_e, detected) => showRecordForm(detected));
+ipcMain.on('record-form-ready', () => {
+  if (recordWin && !recordWin.isDestroyed() && pendingPrefill) {
+    recordWin.webContents.send('prefill', pendingPrefill);
+  }
+});
+ipcMain.on('record-form-cancel', () => {
+  if (recordWin && !recordWin.isDestroyed()) recordWin.close();
+});
+ipcMain.on('record-form-submit', (_e, { data, action }) => {
+  try {
+    const file = saveGameRow(data, action);
+    console.log('[record] saved game →', file);
+  } catch (e) {
+    console.error('[record] save failed', e);
+  }
+  if (recordWin && !recordWin.isDestroyed()) recordWin.close();
+});
+
+const CSV_HEADER = [
+  'timestamp', 'match_id', 'game_no', 'match_complete', 'result', 'format',
+  'seat', 'who_went_first', 'opponent', 'my_score', 'opp_score', 'my_legend',
+  'opp_legend', 'my_battlefield', 'opp_battlefield', 'baron_pit', 'brush',
+  'deck', 'deck_name'
+];
+
+function csvEscape(v) {
+  const s = String(v ?? '');
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function saveGameRow(data, action) {
+  const dir = path.join(app.getPath('documents'), 'RiftReplay');
+  const file = path.join(dir, 'matches.csv');
+  fs.mkdirSync(dir, { recursive: true });
+  const newFile = !fs.existsSync(file);
+
+  if (!currentMatch) currentMatch = { id: 'm_' + Date.now(), games: 0 };
+  const gameNo = currentMatch.games + 1;
+  const complete = action === 'complete';
+
+  const row = {
+    timestamp: new Date().toISOString(),
+    match_id: currentMatch.id,
+    game_no: gameNo,
+    match_complete: complete ? 'yes' : 'no',
+    result: data.result, format: data.format, seat: data.seat,
+    who_went_first: data.wentFirst, opponent: data.opponent,
+    my_score: data.myScore, opp_score: data.oppScore,
+    my_legend: data.myLegend, opp_legend: data.oppLegend,
+    my_battlefield: data.myBattlefield, opp_battlefield: data.oppBattlefield,
+    baron_pit: data.baronPit ? 'yes' : '', brush: data.brush ? 'yes' : '',
+    deck: data.deck, deck_name: data.deckName
+  };
+
+  let out = newFile ? CSV_HEADER.join(',') + '\n' : '';
+  out += CSV_HEADER.map(h => csvEscape(row[h])).join(',') + '\n';
+  fs.appendFileSync(file, out);
+
+  if (complete) {
+    currentMatch = null;
+  } else {
+    currentMatch = {
+      id: currentMatch.id,
+      games: gameNo,
+      carry: {
+        format: data.format, opponent: data.opponent, seat: data.seat,
+        myLegend: data.myLegend, oppLegend: data.oppLegend,
+        deck: data.deck, deckName: data.deckName
+      }
+    };
+  }
+  return file;
+}
+
 // Relay every tracker event from the game page to the overlay.
 ipcMain.on('tracker-event', (_evt, payload) => {
   if (overlayWin && !overlayWin.isDestroyed()) {
@@ -92,6 +240,10 @@ app.whenReady().then(() => {
 
   createGameWindow();
   createOverlayWindow();
+
+  // Hotkey to open the record form (works while the game window is focused).
+  globalShortcut.register('CommandOrControl+Shift+R', openRecordForm);
 });
 
+app.on('will-quit', () => globalShortcut.unregisterAll());
 app.on('window-all-closed', () => app.quit());

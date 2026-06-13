@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Record Game — RiftReplay</title>
+<style>
+  :root {
+    --bg: #0d1017;
+    --panel: #141925;
+    --field: #1b2230;
+    --field-border: #2a3346;
+    --ink: #e8eaf0;
+    --label: #7aa2d6;          /* light blue labels, like the reference */
+    --dim: #8b93a7;
+    --gold: #c9a227;
+    --accent: #2dd4a7;
+    --accent-2: #3b6fd4;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body {
+    font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+    padding: 18px 20px 90px;
+  }
+  h1 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--gold); font-weight: 600; margin-bottom: 14px;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field.span2 { grid-column: 1 / -1; }
+  label { font-size: 12px; font-weight: 600; color: var(--label); }
+  input, select {
+    background: var(--field);
+    border: 1px solid var(--field-border);
+    border-radius: 6px;
+    color: var(--ink);
+    padding: 9px 11px;
+    font: inherit;
+    outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent-2); }
+  select { appearance: none; cursor: pointer; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .extra-row { display: flex; gap: 10px; align-items: center; }
+  .chk {
+    display: flex; align-items: center; gap: 7px;
+    background: var(--field); border: 1px solid var(--field-border);
+    border-radius: 6px; padding: 8px 12px; cursor: pointer; user-select: none;
+  }
+  .chk input { width: 15px; height: 15px; accent-color: var(--gold); cursor: pointer; }
+  .hint { color: var(--dim); font-size: 11px; margin-top: 4px; }
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background: var(--panel);
+    border-top: 1px solid var(--field-border);
+    padding: 14px 20px;
+    display: flex; gap: 12px; justify-content: flex-end;
+  }
+  button {
+    font: inherit; font-weight: 600; border: none; border-radius: 7px;
+    padding: 10px 18px; cursor: pointer; color: #0d1017;
+  }
+  button.secondary { background: #2a3346; color: var(--ink); }
+  button.continue { background: var(--accent-2); color: #fff; }
+  button.complete { background: var(--accent); }
+  button:hover { filter: brightness(1.08); }
+  .matchline { color: var(--dim); font-size: 11px; margin-bottom: 14px; }
+  .matchline b { color: var(--ink); }
+</style>
+</head>
+<body>
+  <h1>Record Game</h1>
+  <div class="matchline" id="matchline"></div>
+
+  <div class="grid">
+    <div class="field">
+      <label for="result">Result</label>
+      <select id="result">
+        <option>Win</option><option>Loss</option><option>Draw</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="format">Format</label>
+      <select id="format">
+        <option>Bo3</option><option>Bo1</option><option>Bo5</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="seat">Seat</label>
+      <select id="seat">
+        <option>Unknown</option><option>First</option><option>Second</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="opponent">Opponent</label>
+      <input id="opponent" type="text" placeholder="Opponent name">
+    </div>
+
+    <div class="field">
+      <label>Score</label>
+      <div class="two">
+        <input id="myScore" type="number" min="0" placeholder="My score">
+        <input id="oppScore" type="number" min="0" placeholder="Opponent score">
+      </div>
+    </div>
+    <div class="field">
+      <label for="wentFirst">Who went first</label>
+      <select id="wentFirst">
+        <option>Unknown</option><option>Me</option><option>Opponent</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="myLegend">My legend</label>
+      <input id="myLegend" type="text" placeholder="e.g. Pyke">
+    </div>
+    <div class="field">
+      <label for="oppLegend">Opponent legend</label>
+      <input id="oppLegend" type="text" placeholder="e.g. Diana">
+    </div>
+
+    <div class="field">
+      <label for="myBattlefield">My battlefield</label>
+      <input id="myBattlefield" type="text">
+    </div>
+    <div class="field">
+      <label for="oppBattlefield">Opponent battlefield</label>
+      <input id="oppBattlefield" type="text">
+    </div>
+
+    <div class="field">
+      <label for="deck">Deck</label>
+      <input id="deck" type="text">
+    </div>
+    <div class="field">
+      <label for="deckName">Deck name</label>
+      <input id="deckName" type="text">
+    </div>
+
+    <div class="field span2">
+      <label>Extra battlefield</label>
+      <div class="extra-row">
+        <label class="chk"><input type="checkbox" id="baronPit"> Baron Pit</label>
+        <label class="chk"><input type="checkbox" id="brush"> Brush</label>
+      </div>
+      <div class="hint">Only saved when ticked. Kept separate from normal battlefield stats.</div>
+    </div>
+  </div>
+
+  <footer>
+    <button class="secondary" id="cancel">Cancel</button>
+    <button class="continue" id="continueMatch">Continue Match</button>
+    <button class="complete" id="completeMatch">Complete Match</button>
+  </footer>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const fields = ['result','format','seat','opponent','myScore','oppScore',
+    'wentFirst','myLegend','oppLegend','myBattlefield','oppBattlefield',
+    'deck','deckName'];
+
+  function setVal(id, v) {
+    if (v === undefined || v === null || v === '') return;
+    const el = $(id);
+    if (el) el.value = v;
+  }
+
+  window.recordForm.onPrefill(data => {
+    for (const f of fields) setVal(f, data[f]);
+    if (data.baronPit) $('baronPit').checked = true;
+    if (data.brush) $('brush').checked = true;
+    const g = data.gameNo || 1;
+    $('matchline').innerHTML = data.matchInProgress
+      ? `Continuing match — recording <b>game ${g}</b>.`
+      : `New match — recording <b>game 1</b>.`;
+  });
+
+  function collect() {
+    const d = {};
+    for (const f of fields) d[f] = $(f).value;
+    d.baronPit = $('baronPit').checked;
+    d.brush = $('brush').checked;
+    return d;
+  }
+
+  $('continueMatch').onclick = () => window.recordForm.submit(collect(), 'continue');
+  $('completeMatch').onclick = () => window.recordForm.submit(collect(), 'complete');
+  $('cancel').onclick = () => window.recordForm.cancel();
+
+  window.recordForm.ready();
+</script>
+</body>
+</html>

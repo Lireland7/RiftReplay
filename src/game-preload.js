@@ -227,6 +227,7 @@ function resetGameState() {
   clearTimeout(pendingTimer);
   prevHand = new Map();
   mulliganSelectedNames = [];
+  firstStarter = null;
   resetScry();
 }
 
@@ -463,6 +464,7 @@ function markDrawn(id, name, source) {
 // actually left the deck (deck total − current remaining) so bounce/return-to-
 // hand effects can't inflate per-card draws beyond reality.
 let prevHand = new Map(); // name -> count seen in hand on the previous tick
+let firstStarter = null;  // name from the first "<name> starting turn 1" log line
 
 // During the mulligan, the opening hand renders in ".mulligan-section" (NOT in
 // ".game-card.Hand"), and cards toggled for replacement get a "selected" class on
@@ -541,6 +543,12 @@ function handleHistoryAddition(node) {
   seenHistoryNodes.add(node);
   const text = (node.innerText || node.textContent || '').trim();
   if (!text) return;
+
+  // Record who took the first turn (the first "<name> starting turn 1" line).
+  let fm;
+  if (!firstStarter && (fm = text.match(/^(.+?)\s+starting turn 1\b/i))) {
+    firstStarter = fm[1].trim();
+  }
 
   let m;
   if ((m = text.match(/looked at the top (\d+) cards? of (their|your) deck/i))) {
@@ -643,6 +651,80 @@ function startObservers() {
   setInterval(() => { checkDeckCounter(); syncHand(); syncMulligan(); }, 1000);
   emit('observer-started', {});
 }
+
+// ------------------------------------------------ record-game collection ---
+// Best-effort auto-fill for the Record Game form, gathered from the live DOM.
+// Card zones are on the .game-card element's own class; the local player's area
+// is the ".player-section.current-player".
+function nameOfCardIn(root, selector) {
+  if (!root) return '';
+  for (const el of root.querySelectorAll(selector)) {
+    const id = cardIdFromEl(el);
+    if (id) return cardNameFromId(id);
+  }
+  return '';
+}
+
+function collectGameData() {
+  let data = {};
+  try {
+    const sections = [...document.querySelectorAll('.player-section')];
+    const mySec = document.querySelector('.player-section.current-player') || sections[0] || null;
+    const oppSec = sections.find(s => s !== mySec) || null;
+
+    data = {
+      myLegend: nameOfCardIn(mySec, '.game-card.Legend.card-hidden-no') ||
+                nameOfCardIn(mySec, '.game-card.Chosen_Champion.card-hidden-no') ||
+                state.champion || '',
+      oppLegend: nameOfCardIn(oppSec, '.game-card.Legend.card-hidden-no') ||
+                 nameOfCardIn(oppSec, '.game-card.Chosen_Champion.card-hidden-no') || '',
+      myBattlefield: nameOfCardIn(mySec, '.game-card.Battlefields.card-hidden-no'),
+      oppBattlefield: nameOfCardIn(oppSec, '.game-card.Battlefields.card-hidden-no'),
+      wentFirst: 'Unknown',     // refined once we map firstStarter → Me/Opponent
+      deck: state.champion || '',
+      deckName: '',
+      _debug: gatherGameDebug(mySec, oppSec, sections)
+    };
+  } catch (e) {
+    data = { _debug: { error: String(e) } };
+  }
+  return data;
+}
+
+// Rich dump so the remaining fields (opponent legend, battlefields split, scores,
+// player names, result) can be wired to precise selectors. Written to disk by main.
+function gatherGameDebug(mySec, oppSec, sections) {
+  const dumpSection = (sec) => {
+    if (!sec) return null;
+    const cardsByZone = {};
+    for (const el of sec.querySelectorAll('.game-card')) {
+      const cls = (typeof el.className === 'string' ? el.className : '');
+      const zone = (cls.match(/game-card (\w+)/) || [])[1] || '?';
+      const id = cardIdFromEl(el);
+      (cardsByZone[zone] = cardsByZone[zone] || []).push(id ? cardNameFromId(id) : null);
+    }
+    const counters = [...sec.querySelectorAll('[class*="counter" i], [class*="player-info" i], [class*="score" i]')]
+      .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').slice(0, 40) }))
+      .filter(x => x.text).slice(0, 12);
+    return { cls: (typeof sec.className === 'string' ? sec.className : '').slice(0, 80), cardsByZone, counters };
+  };
+  return {
+    ts: new Date().toISOString(),
+    firstStarter,
+    sectionCount: sections.length,
+    mySection: dumpSection(mySec),
+    oppSection: dumpSection(oppSec),
+    allBattlefields: [...document.querySelectorAll('.game-card.Battlefields')].map(el => {
+      const id = cardIdFromEl(el);
+      return { cls: (typeof el.className === 'string' ? el.className : '').slice(0, 70), name: id ? cardNameFromId(id) : null };
+    })
+  };
+}
+
+ipcRenderer.on('request-game-data', () => {
+  try { ipcRenderer.send('game-data', collectGameData()); }
+  catch (e) { ipcRenderer.send('game-data', { _debug: { error: String(e) } }); }
+});
 
 // ---------------------------------------------------------------- boot -----
 window.addEventListener('DOMContentLoaded', () => {
