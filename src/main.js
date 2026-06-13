@@ -24,9 +24,15 @@ function createGameWindow() {
   });
 
   gameWin.loadURL('https://tcg-arena.fr/play');
+
+  // tcg-arena.fr registers a beforeunload handler (to warn about leaving a
+  // match), which otherwise vetoes the window's close button and leaves the app
+  // running until killed in Task Manager. Let the unload proceed.
+  gameWin.webContents.on('will-prevent-unload', (event) => event.preventDefault());
+
   gameWin.on('closed', () => {
     gameWin = null;
-    if (overlayWin) overlayWin.close();
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.destroy();
   });
 }
 
