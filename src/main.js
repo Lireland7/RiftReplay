@@ -4,11 +4,14 @@
 //   2. overlayWin — frameless, always-on-top deck tracker UI
 // All tracker events flow: game-preload --IPC--> main --IPC--> overlay.
 
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, session } = require('electron');
 const path = require('path');
 
 let gameWin = null;
 let overlayWin = null;
+
+// The only origin the game window is allowed to load in-app.
+const GAME_ORIGIN = 'https://tcg-arena.fr';
 
 function createGameWindow() {
   gameWin = new BrowserWindow({
@@ -19,11 +22,24 @@ function createGameWindow() {
       preload: path.join(__dirname, 'game-preload.js'),
       contextIsolation: true,   // page JS cannot touch our preload internals
       nodeIntegration: false,
-      sandbox: false            // preload needs ipcRenderer
+      sandbox: true             // preload only needs ipcRenderer/fetch/DOM
     }
   });
 
   gameWin.loadURL('https://tcg-arena.fr/play');
+
+  // Keep in-app navigation on tcg-arena.fr; send anything else to the real
+  // browser instead of loading untrusted content with our preload attached.
+  gameWin.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(GAME_ORIGIN)) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  gameWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http')) shell.openExternal(url);
+    return { action: 'deny' };
+  });
 
   // tcg-arena.fr registers a beforeunload handler (to warn about leaving a
   // match), which otherwise vetoes the window's close button and leaves the app
@@ -71,6 +87,9 @@ ipcMain.on('tracker-event', (_evt, payload) => {
 });
 
 app.whenReady().then(() => {
+  // The tracker is read-only; the remote page never needs device permissions.
+  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+
   createGameWindow();
   createOverlayWindow();
 });

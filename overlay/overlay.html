@@ -136,6 +136,14 @@
 
   const $ = id => document.getElementById(id);
 
+  // Escape card names before interpolating into innerHTML — names come from the
+  // external card DB / game DOM, so treat them as untrusted to avoid XSS.
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
   function deckRemaining() {
     let r = 0;
     for (const v of deck.values()) r += v.total - v.drawn;
@@ -191,7 +199,7 @@
         return `
           <div class="row ${cls}">
             <div class="line">
-              <span class="name">${name}</span>
+              <span class="name">${esc(name)}</span>
               <span class="count"><b>${drawable}</b><i>/${v.total}</i></span>
               <span class="odds">${odds}</span>
             </div>
@@ -218,7 +226,7 @@
           rows.push(`
             <div class="${cls}">
               <div class="line">
-                <span class="name">${c.name}</span>
+                <span class="name">${esc(c.name)}</span>
                 <span class="count"><b>${c.count}</b></span>
                 <span class="odds">↓</span>
               </div>
