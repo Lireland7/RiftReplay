@@ -711,15 +711,17 @@ function startObservers() {
 // Best-effort auto-fill for the Record Game form, gathered from the live DOM.
 // Card zones are on the .game-card element's own class; the local player's area
 // is the ".player-section.current-player".
-// Read the game-tracked score from the .player-counters element adjacent to a
-// .pseudo.my-auto badge. Structure (verified from DOM dump):
-//   .PLAYER-COUNTER > .player-info > .pseudo.my-auto  (name badge)
-//   .PLAYER-COUNTER > .player-counters                (score: "N\n\n▲\n▼")
+// Read the player score from the number input inside .player-counters.
+// Verified DOM structure:
+//   .PLAYER-COUNTER > .player-info > .pseudo.my-auto   (name badge)
+//   .PLAYER-COUNTER > .player-counters > ... > input[type="number"]  (value="5")
+// The counter also shows a <p class="difference">+5</p> overlay, but the input
+// .value is the canonical source regardless of display state.
 function readPlayerScore(pseudoEl) {
-  const counterEl = pseudoEl?.parentElement?.parentElement
-                              ?.querySelector('.player-counters');
-  const m = (counterEl?.innerText || '').match(/\d+/);
-  return m ? parseInt(m[0], 10) : null;
+  const wrapper = pseudoEl?.parentElement?.parentElement;
+  const input = wrapper?.querySelector('.player-counters input[type="number"]');
+  if (input) return parseInt(input.value, 10) || 0;
+  return null;
 }
 
 function nameOfCardIn(root, selector) {
@@ -802,17 +804,6 @@ function collectGameData() {
 // Rich dump so the remaining fields (opponent legend, battlefields split, scores,
 // player names, result) can be wired to precise selectors. Written to disk by main.
 function gatherGameDebug(mySec, oppSec, sections) {
-  const COUNTER_SEL = [
-    '[class*="counter" i]', '[class*="player-info" i]', '[class*="score" i]',
-    '[class*="point" i]', '[class*="life" i]', '[class*="health" i]',
-    '[class*="hp" i]', '[class*="star" i]'
-  ].join(', ');
-  const NAME_SEL = [
-    '[class*="player-name" i]', '[class*="username" i]', '[class*="pseudo" i]',
-    '[class*="nickname" i]', '[class*="handle" i]', '[class*="avatar" i]',
-    '[class*="profile" i]'
-  ].join(', ');
-
   const dumpSection = (sec) => {
     if (!sec) return null;
     const cardsByZone = {};
@@ -822,52 +813,17 @@ function gatherGameDebug(mySec, oppSec, sections) {
       const id = cardIdFromEl(el);
       (cardsByZone[zone] = cardsByZone[zone] || []).push(id ? cardNameFromId(id) : null);
     }
-    const counters = [...sec.querySelectorAll(COUNTER_SEL)]
-      .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').slice(0, 40) }))
-      .filter(x => x.text).slice(0, 20);
-    // Player name label candidates (short text nodes in name/user/profile elements).
-    const nameLabels = [...sec.querySelectorAll(NAME_SEL)]
-      .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 60) }))
-      .filter(x => x.text && x.text.length < 40).slice(0, 8);
-    // All short leaf-node texts that could be a username (1–20 chars, no spaces or 1 word).
-    const leafTexts = [...sec.querySelectorAll('*')]
-      .filter(e => e.children.length === 0)
-      .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 40) }))
-      .filter(x => x.text && x.text.length >= 3 && x.text.length <= 24 && !/^\d+$/.test(x.text))
-      .slice(0, 20);
-    return { cls: (typeof sec.className === 'string' ? sec.className : '').slice(0, 80), cardsByZone, counters, nameLabels, leafTexts };
+    return { cls: (typeof sec.className === 'string' ? sec.className : '').slice(0, 80), cardsByZone };
   };
 
-  // Also search for player names in the page header/nav (global username display).
-  const globalNameEls = [...document.querySelectorAll(NAME_SEL)]
-    .filter(e => !mySec?.contains(e) && !oppSec?.contains(e))
-    .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 60) }))
-    .filter(x => x.text && x.text.length < 40).slice(0, 6);
-
-  // Dump parent + grandparent context of each .pseudo.my-auto to find the score element.
-  // The score "3"/"5" shown next to the player name is not inside .player-info (parent of
-  // .pseudo) — it must be in the grandparent or a sibling of .player-info.
+  // Score per player: read from the number input inside .player-counters
+  // (.PLAYER-COUNTER > .player-counters > … > input[type="number"]).
   const pseudoContexts = [...document.querySelectorAll('.pseudo.my-auto')].map(el => {
-    const parent = el.parentElement;
-    const grandparent = parent?.parentElement;
-    const cls = e => (typeof e?.className === 'string' ? e.className : '').slice(0, 80);
-    const txt = e => (e?.innerText || '').trim().slice(0, 40);
+    const wrapper = el.parentElement?.parentElement;
+    const input = wrapper?.querySelector('.player-counters input[type="number"]');
     return {
-      pseudoText: txt(el),
-      parentCls: cls(parent),
-      parentSiblings: [...(parent?.parentElement?.children || [])].map(c => ({
-        cls: cls(c), text: txt(c)
-      })),
-      grandparentCls: cls(grandparent),
-      grandparentSiblings: [...(grandparent?.parentElement?.children || [])].map(c => ({
-        cls: cls(c), text: txt(c).slice(0, 20)
-      })),
-      // Full HTML of the score element so we can find how the value is stored
-      // (may be a data-attribute or CSS counter rather than a text node).
-      playerCountersHTML: (() => {
-        const el = grandparent?.querySelector('.player-counters');
-        return el ? el.outerHTML.slice(0, 600) : null;
-      })()
+      name: (el.innerText || '').trim(),
+      score: input ? (parseInt(input.value, 10) || 0) : null
     };
   });
 
@@ -876,10 +832,8 @@ function gatherGameDebug(mySec, oppSec, sections) {
     firstStarter,
     localPlayerName,
     sectionCount: sections.length,
-    allSectionClasses: sections.map(s => (typeof s.className === 'string' ? s.className : '').slice(0, 80)),
     mySection: dumpSection(mySec),
     oppSection: dumpSection(oppSec),
-    globalNameEls,
     pseudoContexts,
     allBattlefields: [...document.querySelectorAll('.game-card.Battlefields')].map(el => {
       const id = cardIdFromEl(el);
