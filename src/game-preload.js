@@ -479,12 +479,29 @@ let localPlayerName = null;
 let mulliganSelectedNames = [];
 
 // Reads the local player's username from the in-game player name badges.
-// The game renders two `.pseudo.my-auto` elements: opponent first (top of screen),
-// local player second (bottom) — so the last one is always us.
+// Strategy: walk up from the .player-section (always the local player's card area)
+// and look for a .pseudo.my-auto sibling in the same container — topology-based,
+// not DOM-order-based, so it survives lobby/results screens flipping the order.
 function detectLocalPlayerName() {
+  const sec = document.querySelector('.player-section');
+  if (sec) {
+    // Try siblings of player-section (they typically share a player-container div)
+    const parent = sec.parentElement;
+    if (parent) {
+      for (const sib of parent.children) {
+        const pseudo = sib.querySelector?.('.pseudo.my-auto') ||
+          (sib.classList?.contains('pseudo') && sib.classList?.contains('my-auto') ? sib : null);
+        if (pseudo && pseudo !== sib) { const t = pseudo.innerText.trim(); if (t) return t; }
+        // Also check if sib itself is the pseudo
+        if (sib.classList?.contains('pseudo') && sib.classList?.contains('my-auto')) {
+          const t = sib.innerText.trim(); if (t) return t;
+        }
+      }
+    }
+  }
+  // Fallback: last .pseudo.my-auto in DOM (opponent top, local player bottom in a live game)
   const els = document.querySelectorAll('.pseudo.my-auto');
-  if (!els.length) return null;
-  return els[els.length - 1].innerText.trim() || null;
+  return els.length ? els[els.length - 1].innerText.trim() || null : null;
 }
 
 // Returns true if this history log line is an action by the local player.
@@ -493,7 +510,10 @@ function detectLocalPlayerName() {
 // prefix belongs to the opponent so we don't corrupt our own deck state.
 function isMyHistoryLine(text) {
   if (!localPlayerName) return true; // name not detected yet → process everything (safe)
-  if (text.startsWith(localPlayerName)) return true;
+  // Case-insensitive name comparison — the log may use different casing than innerText.
+  const lower = text.toLowerCase();
+  const lname = localPlayerName.toLowerCase();
+  if (lower.startsWith(lname + ' ') || lower.startsWith(lname + '\n')) return true;
   // Lines beginning with a bare verb have no player prefix → treat as ours.
   if (/^(you\s|sent\s|put\s|drew\s|played\s|looked\s|mulliganed\s|has\s)/i.test(text)) return true;
   return false; // non-empty name prefix that isn't ours → opponent's action
@@ -807,15 +827,23 @@ function gatherGameDebug(mySec, oppSec, sections) {
     .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 60) }))
     .filter(x => x.text && x.text.length < 40).slice(0, 6);
 
-  // Dump parent + siblings of each .pseudo.my-auto to find the adjacent score element.
+  // Dump parent + grandparent context of each .pseudo.my-auto to find the score element.
+  // The score "3"/"5" shown next to the player name is not inside .player-info (parent of
+  // .pseudo) — it must be in the grandparent or a sibling of .player-info.
   const pseudoContexts = [...document.querySelectorAll('.pseudo.my-auto')].map(el => {
     const parent = el.parentElement;
+    const grandparent = parent?.parentElement;
+    const cls = e => (typeof e?.className === 'string' ? e.className : '').slice(0, 80);
+    const txt = e => (e?.innerText || '').trim().slice(0, 40);
     return {
-      pseudoText: (el.innerText || '').trim(),
-      parentCls: (typeof parent?.className === 'string' ? parent.className : '').slice(0, 80),
-      siblings: [...(parent?.children || [])].map(c => ({
-        cls: (typeof c.className === 'string' ? c.className : '').slice(0, 70),
-        text: (c.innerText || '').trim().slice(0, 30)
+      pseudoText: txt(el),
+      parentCls: cls(parent),
+      parentSiblings: [...(parent?.parentElement?.children || [])].map(c => ({
+        cls: cls(c), text: txt(c)
+      })),
+      grandparentCls: cls(grandparent),
+      grandparentSiblings: [...(grandparent?.parentElement?.children || [])].map(c => ({
+        cls: cls(c), text: txt(c).slice(0, 20)
       }))
     };
   });
