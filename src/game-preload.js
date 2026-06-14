@@ -711,6 +711,17 @@ function startObservers() {
 // Best-effort auto-fill for the Record Game form, gathered from the live DOM.
 // Card zones are on the .game-card element's own class; the local player's area
 // is the ".player-section.current-player".
+// Read the game-tracked score from the .player-counters element adjacent to a
+// .pseudo.my-auto badge. Structure (verified from DOM dump):
+//   .PLAYER-COUNTER > .player-info > .pseudo.my-auto  (name badge)
+//   .PLAYER-COUNTER > .player-counters                (score: "N\n\n▲\n▼")
+function readPlayerScore(pseudoEl) {
+  const counterEl = pseudoEl?.parentElement?.parentElement
+                              ?.querySelector('.player-counters');
+  const m = (counterEl?.innerText || '').match(/\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
 function nameOfCardIn(root, selector) {
   if (!root) return '';
   for (const el of root.querySelectorAll(selector)) {
@@ -734,9 +745,13 @@ function collectGameData() {
       wentFirst = firstStarter === localPlayerName ? 'Me' : 'Opponent';
     }
 
-    // Opponent name: the .pseudo.my-auto that isn't the local player.
+    // Identify each player's .pseudo.my-auto for name + score extraction.
     const pseudos = [...document.querySelectorAll('.pseudo.my-auto')];
-    const oppName = pseudos.find(p => p.innerText.trim() !== localPlayerName)?.innerText.trim() || '';
+    const lname = (localPlayerName || '').toLowerCase();
+    const myPseudo  = pseudos.find(p => p.innerText.trim().toLowerCase() === lname)
+                   ?? pseudos[pseudos.length - 1] ?? null;
+    const oppPseudo = pseudos.find(p => p !== myPseudo) ?? null;
+    const oppName = oppPseudo?.innerText.trim() || '';
 
     // Opponent battlefield: first Battlefields card NOT inside my own section.
     let oppBattlefield = nameOfCardIn(oppSec, '.game-card.Battlefields.card-hidden-no');
@@ -772,6 +787,8 @@ function collectGameData() {
       oppBattlefield,
       wentFirst,
       opponent: oppName,
+      myScore:  readPlayerScore(myPseudo)  ?? '',
+      oppScore: readPlayerScore(oppPseudo) ?? '',
       deck: state.champion || '',
       deckName: '',
       _debug: gatherGameDebug(mySec, oppSec, sections)
