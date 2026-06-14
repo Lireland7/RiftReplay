@@ -1,12 +1,12 @@
 {
   "name": "riftreplay",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Deck tracker overlay for Riftbound on tcg-arena.fr",
   "author": "RiftReplay",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder --publish always"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -23,20 +23,19 @@
     "directories": {
       "output": "dist"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "Lireland7",
+      "repo": "RiftReplay"
+    },
     "win": {
-      "target": [
-        "portable",
-        "nsis"
-      ]
+      "target": ["portable"]
     },
     "portable": {
       "artifactName": "RiftReplay-${version}-portable.exe"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "artifactName": "RiftReplay-Setup-${version}.exe"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

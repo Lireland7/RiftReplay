@@ -4,10 +4,27 @@
 //   2. overlayWin — frameless, always-on-top deck tracker UI
 // All tracker events flow: game-preload --IPC--> main --IPC--> overlay.
 
-const { app, BrowserWindow, ipcMain, screen, shell, session, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, session, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
+const { autoUpdater } = require('electron-updater');
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on('update-available', () => {
+  dialog.showMessageBox({ type: 'info', title: 'Update available', message: 'A new version of RiftReplay is downloading in the background. You\'ll be prompted to restart when it\'s ready.' });
+});
+
+autoUpdater.on('update-downloaded', () => {
+  dialog.showMessageBox({
+    type: 'info', title: 'Update ready',
+    message: 'RiftReplay update downloaded.',
+    detail: 'Restart now to apply the update, or it will install automatically when you close the app.',
+    buttons: ['Restart now', 'Later']
+  }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+});
 
 // ─── Supabase config ─────────────────────────────────────────────────────────
 // Fill in your Project URL and anon key from supabase.com → Settings → API.
@@ -491,6 +508,9 @@ app.whenReady().then(() => {
 
   // Hotkey to open the record form (works while the game window is focused).
   globalShortcut.register('CommandOrControl+Shift+R', openRecordForm);
+
+  // Check for updates silently on launch; only bothers the user if one is found.
+  autoUpdater.checkForUpdates().catch(() => {});
 });
 
 app.on('will-quit', () => globalShortcut.unregisterAll());
