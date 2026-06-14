@@ -807,14 +807,29 @@ function gatherGameDebug(mySec, oppSec, sections) {
     .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 60) }))
     .filter(x => x.text && x.text.length < 40).slice(0, 6);
 
+  // Dump parent + siblings of each .pseudo.my-auto to find the adjacent score element.
+  const pseudoContexts = [...document.querySelectorAll('.pseudo.my-auto')].map(el => {
+    const parent = el.parentElement;
+    return {
+      pseudoText: (el.innerText || '').trim(),
+      parentCls: (typeof parent?.className === 'string' ? parent.className : '').slice(0, 80),
+      siblings: [...(parent?.children || [])].map(c => ({
+        cls: (typeof c.className === 'string' ? c.className : '').slice(0, 70),
+        text: (c.innerText || '').trim().slice(0, 30)
+      }))
+    };
+  });
+
   return {
     ts: new Date().toISOString(),
     firstStarter,
+    localPlayerName,
     sectionCount: sections.length,
     allSectionClasses: sections.map(s => (typeof s.className === 'string' ? s.className : '').slice(0, 80)),
     mySection: dumpSection(mySec),
     oppSection: dumpSection(oppSec),
     globalNameEls,
+    pseudoContexts,
     allBattlefields: [...document.querySelectorAll('.game-card.Battlefields')].map(el => {
       const id = cardIdFromEl(el);
       return { cls: (typeof el.className === 'string' ? el.className : '').slice(0, 70), name: id ? cardNameFromId(id) : null };
