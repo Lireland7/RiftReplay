@@ -603,11 +603,16 @@ function handleHistoryAddition(node) {
   const text = (node.innerText || node.textContent || '').trim();
   if (!text) return;
 
-  // Record who took the first turn — runs for ALL players (we need this even for
-  // opponent's turn so we can determine wentFirst in collectGameData).
+  // Record who took the first turn, and track turn count for the local player.
+  // "X starting turn N" is the authoritative signal — reliably attributed by name,
+  // unlike "drew N" which fires for both players with no name prefix.
   let fm;
-  if (!firstStarter && (fm = text.match(/^(.+?)\s+starting turn 1\b/i))) {
-    firstStarter = fm[1].trim();
+  if ((fm = text.match(/^(.+?)\s+starting turn (\d+)\b/i))) {
+    const starter = fm[1].trim();
+    if (!firstStarter && fm[2] === '1') firstStarter = starter;
+    if (localPlayerName && starter.toLowerCase() === localPlayerName.toLowerCase()) {
+      state.turnCount = parseInt(fm[2], 10);
+    }
   }
 
   // All deck-state mutations (recycle, scry, mulligan) must only fire for OUR
@@ -659,10 +664,6 @@ function handleHistoryAddition(node) {
       emit('recycled-update', { ...recycledPayload(), raw: text });
     }
   } else if ((m = text.match(/drew (\d+)/i))) {
-    if (myAction) {
-      if (!state.openingHandDone) { state.openingHandDone = true; }
-      else { state.turnCount++; }
-    }
     emit('log-drew', { count: parseInt(m[1], 10), raw: text });
   } else if ((m = text.match(/played (.+?) from/i))) {
     emit('log-played', { card: m[1], raw: text });
@@ -815,7 +816,7 @@ function collectGameData() {
       mulliganCards: state.mulliganCardNames.join('|'),
       turns: state.turnCount > 0 ? state.turnCount : '',
       cardsDrawn: state.drawnCards.join('|'),
-      sideboardCardsDrawn: state.drawnCards.filter(n => state.sideboard.has(n)).join('|'),
+      sideboardCardsDrawn: state.drawnCards.filter(n => state.sideboard.has(n) && !state.deck.has(n)).join('|'),
       _debug: gatherGameDebug(mySec, oppSec, sections)
     };
   } catch (e) {

@@ -361,8 +361,41 @@
       ${cardTableHtml('Drawn W/R', drawnCards)}`;
   }
 
+  function buildMyLegendBreakdownHtml(games) {
+    const legendMap = groupBy(games, g => g.my_legend || 'Unknown');
+    const legends = [...legendMap.entries()]
+      .filter(([k]) => k && k !== 'Unknown')
+      .sort((a, b) => b[1].length - a[1].length);
+    if (legends.length < 2) return '';
+
+    const rows = legends.map(([legend, gs]) => {
+      const w = winsOf(gs), l = lossesOf(gs), t = gs.length;
+      const p = pct(w, t), col = wrColor(p);
+      const firstGs  = gs.filter(g => g.who_went_first === 'Me');
+      const secondGs = gs.filter(g => g.who_went_first === 'Opponent');
+      return `<div class="ct-row">
+        <span class="ct-name" style="font-weight:600">${esc(legend)}</span>
+        <span class="ct-rec">${recStr(w, l)}</span>
+        <span class="ct-wr" style="color:${col}">${wrStr(w, t)}</span>
+        <div style="color:var(--dim);font-size:11px">
+          1st ${wrStr(winsOf(firstGs), firstGs.length)} · 2nd ${wrStr(winsOf(secondGs), secondGs.length)}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `
+      <p class="section-title" style="margin-top:14px">By Legend Played</p>
+      <div class="card-table" style="margin-bottom:10px">
+        <div class="ct-head" style="grid-template-columns:1fr 90px 54px 1fr">
+          <span>Legend</span><span>Record</span><span>WR</span><span>Seat split</span>
+        </div>
+        ${rows}
+      </div>`;
+  }
+
   function renderDeckStats(games) {
-    document.getElementById('tab-deck').innerHTML = buildDeckStatsHtml(games);
+    const extra = !currentDeck ? buildMyLegendBreakdownHtml(games) : '';
+    document.getElementById('tab-deck').innerHTML = buildDeckStatsHtml(games) + extra;
   }
 
   /* ─── LEGEND STATS ─── */
@@ -549,6 +582,38 @@
         </div>` : ''}`;
   }
 
+  function buildCommunityLegendHtml(cGs) {
+    const legendMap = groupBy(cGs, g => g.opp_legend || '');
+    const legends = [...legendMap.entries()]
+      .filter(([k]) => k && k !== 'Unknown')
+      .sort((a, b) => b[1].length - a[1].length);
+    if (!legends.length) return '';
+
+    const rows = legends.map(([legend, gs]) => {
+      const w = winsOf(gs), l = lossesOf(gs), t = gs.length;
+      const p = pct(w, t), col = wrColor(p);
+      const firstGs  = gs.filter(g => g.who_went_first === 'Me');
+      const secondGs = gs.filter(g => g.who_went_first === 'Opponent');
+      return `<div class="ct-row">
+        <span class="ct-name" style="font-weight:600">${esc(legend)}</span>
+        <span class="ct-rec">${recStr(w, l)}</span>
+        <span class="ct-wr" style="color:${col}">${wrStr(w, t)}</span>
+        <div style="color:var(--dim);font-size:11px">
+          1st ${wrStr(winsOf(firstGs), firstGs.length)} · 2nd ${wrStr(winsOf(secondGs), secondGs.length)}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `
+      <p class="section-title">Community W/R by Opponent Legend</p>
+      <div class="card-table" style="margin-bottom:10px">
+        <div class="ct-head" style="grid-template-columns:1fr 90px 54px 1fr">
+          <span>Legend</span><span>Record</span><span>WR</span><span>Seat split</span>
+        </div>
+        ${rows}
+      </div>`;
+  }
+
   function renderCommunityMain() {
     const cGs = filteredCommunityGames();
     const myGs = filteredGames();
@@ -566,6 +631,7 @@
         ${currentDeck ? ` · filtered to <b style="color:var(--ink)">${esc(currentDeck)}</b>` : ''}
       </p>
       ${buildDeckStatsHtml(cGs)}
+      ${buildCommunityLegendHtml(cGs)}
       ${myGs.length ? buildComparisonHtml(myGs, cGs) : ''}`;
   }
 
