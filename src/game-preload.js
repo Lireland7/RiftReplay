@@ -861,7 +861,13 @@ function gatherGameDebug(mySec, oppSec, sections) {
       grandparentCls: cls(grandparent),
       grandparentSiblings: [...(grandparent?.parentElement?.children || [])].map(c => ({
         cls: cls(c), text: txt(c).slice(0, 20)
-      }))
+      })),
+      // Full HTML of the score element so we can find how the value is stored
+      // (may be a data-attribute or CSS counter rather than a text node).
+      playerCountersHTML: (() => {
+        const el = grandparent?.querySelector('.player-counters');
+        return el ? el.outerHTML.slice(0, 600) : null;
+      })()
     };
   });
 
