@@ -228,6 +228,7 @@ function resetGameState() {
   prevHand = new Map();
   mulliganSelectedNames = [];
   firstStarter = null;
+  localPlayerName = null; // re-detect for the new game (opponent may differ)
   resetScry();
 }
 
@@ -465,6 +466,10 @@ function markDrawn(id, name, source) {
 // hand effects can't inflate per-card draws beyond reality.
 let prevHand = new Map(); // name -> count seen in hand on the previous tick
 let firstStarter = null;  // name from the first "<name> starting turn 1" log line
+// Local player's username — the last `.pseudo.my-auto` element in DOM order
+// (opponent is at the top of the screen, local player at the bottom). Detected
+// lazily because the element only appears once a game lobby loads.
+let localPlayerName = null;
 
 // During the mulligan, the opening hand renders in ".mulligan-section" (NOT in
 // ".game-card.Hand"), and cards toggled for replacement get a "selected" class on
@@ -472,6 +477,27 @@ let firstStarter = null;  // name from the first "<name> starting turn 1" log li
 // confirmed ("mulliganed N cards") we can send those exact cards to a random
 // bottom layer. Holds its last value after the screen tears down.
 let mulliganSelectedNames = [];
+
+// Reads the local player's username from the in-game player name badges.
+// The game renders two `.pseudo.my-auto` elements: opponent first (top of screen),
+// local player second (bottom) — so the last one is always us.
+function detectLocalPlayerName() {
+  const els = document.querySelectorAll('.pseudo.my-auto');
+  if (!els.length) return null;
+  return els[els.length - 1].innerText.trim() || null;
+}
+
+// Returns true if this history log line is an action by the local player.
+// The game prefixes log lines with the acting player's name (e.g.
+// "Dokgebi sent X to the bottom of their deck"). We skip events whose
+// prefix belongs to the opponent so we don't corrupt our own deck state.
+function isMyHistoryLine(text) {
+  if (!localPlayerName) return true; // name not detected yet → process everything (safe)
+  if (text.startsWith(localPlayerName)) return true;
+  // Lines beginning with a bare verb have no player prefix → treat as ours.
+  if (/^(you\s|sent\s|put\s|drew\s|played\s|looked\s|mulliganed\s|has\s)/i.test(text)) return true;
+  return false; // non-empty name prefix that isn't ours → opponent's action
+}
 
 function syncMulligan() {
   if (!document.querySelector('.mulligan-section')) return; // screen not up — keep last
@@ -544,72 +570,77 @@ function handleHistoryAddition(node) {
   const text = (node.innerText || node.textContent || '').trim();
   if (!text) return;
 
-  // Record who took the first turn (the first "<name> starting turn 1" line).
+  // Record who took the first turn — runs for ALL players (we need this even for
+  // opponent's turn so we can determine wentFirst in collectGameData).
   let fm;
   if (!firstStarter && (fm = text.match(/^(.+?)\s+starting turn 1\b/i))) {
     firstStarter = fm[1].trim();
   }
 
+  // All deck-state mutations (recycle, scry, mulligan) must only fire for OUR
+  // deck. The history log shows both players' actions, so gate them.
+  const myAction = isMyHistoryLine(text);
+
   let m;
   if ((m = text.match(/looked at the top (\d+) cards? of (their|your) deck/i))) {
-    // A scry effect is starting. The .revealed-section strip (syncScry) is the
-    // source of truth for which cards — this is just an informational signal.
-    scryDrawnNames = []; // fresh scry: forget any prior scry-draw exclusions
-    scryRecycledNames = [];
-    emit('scry-started', { count: parseInt(m[1], 10), raw: text });
+    if (myAction) {
+      scryDrawnNames = [];
+      scryRecycledNames = [];
+      emit('scry-started', { count: parseInt(m[1], 10), raw: text });
+    }
   } else if ((m = text.match(/drew (.+?) from deck/i))) {
-    // Named draw from a look/scry effect (e.g. "drew Noxus Hopeful from deck").
-    // syncHand attributes the actual draw; here we just record the name so the
-    // bulk-recycle below doesn't also count this card as sent to the bottom.
-    scryDrawnNames.push(m[1]);
-    emit('log-drew-named', { card: m[1], raw: text });
+    if (myAction) {
+      scryDrawnNames.push(m[1]);
+      emit('log-drew-named', { card: m[1], raw: text });
+    }
   } else if ((m = text.match(/sent (.+?) to the bottom of (their|your) deck/i))) {
-    // Single named card recycled → its own layer of one (no randomness).
-    state.recycledLayers.push({ named: [m[1]], anonymous: 0 });
-    if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
-    emit('recycled-update', { ...recycledPayload(), raw: text });
+    if (myAction) {
+      // Single named card recycled → its own layer of one (no randomness).
+      state.recycledLayers.push({ named: [m[1]], anonymous: 0 });
+      if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
+      emit('recycled-update', { ...recycledPayload(), raw: text });
+    }
   } else if ((m = text.match(/put (.+?) from the top of (their|your) deck to the bottom/i))) {
-    // Single card bottomed from a scry ("put X from the top ... to the bottom").
-    // Its own layer of one. The card leaves the scry strip but stays in the deck,
-    // so make sure syncScry doesn't count its removal as a draw.
-    const name = m[1];
-    state.recycledLayers.push({ named: [name], anonymous: 0 });
-    const ai = scryActionedPending.indexOf(name);
-    if (ai >= 0) scryActionedPending.splice(ai, 1); // already removed from strip
-    else scryRecycledNames.push(name);              // removal not seen yet
-    if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
-    emit('recycled-update', { ...recycledPayload(), raw: text });
+    if (myAction) {
+      // Single card bottomed from a scry. Its own layer of one. The card leaves
+      // the scry strip but stays in the deck, so prevent syncScry miscounting it.
+      const name = m[1];
+      state.recycledLayers.push({ named: [name], anonymous: 0 });
+      const ai = scryActionedPending.indexOf(name);
+      if (ai >= 0) scryActionedPending.splice(ai, 1);
+      else scryRecycledNames.push(name);
+      if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
+      emit('recycled-update', { ...recycledPayload(), raw: text });
+    }
   } else if ((m = text.match(/put all (\d+) looked cards? to the bottom/i))) {
-    // Bulk scry-recycle → one layer (these cards are randomized among themselves).
-    // The cards going to the bottom are those still shown in the strip MINUS any
-    // drawn to hand during this scry (the game keeps a drawn card visible in the
-    // strip until the action resolves, or it'd be double-counted drawn+recycled).
-    const count = parseInt(m[1], 10);
-    const named = multisetSubtract(scryCards, scryDrawnNames);
-    // Any copies we couldn't see (e.g. unrevealed "Show one more" cards) → anonymous.
-    const anonymous = Math.max(0, count - named.length);
-
-    state.recycledLayers.push({ named, anonymous });
-    if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
-    resetScry();
-
-    emit('recycled-update', { ...recycledPayload(), raw: text });
+    if (myAction) {
+      // Bulk scry-recycle → one layer (randomized). Cards still in the strip
+      // MINUS any drawn to hand during this scry (game keeps drawn card visible
+      // until the action resolves, so exclude to avoid double-counting).
+      const count = parseInt(m[1], 10);
+      const named = multisetSubtract(scryCards, scryDrawnNames);
+      const anonymous = Math.max(0, count - named.length);
+      state.recycledLayers.push({ named, anonymous });
+      if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
+      resetScry();
+      emit('recycled-update', { ...recycledPayload(), raw: text });
+    }
   } else if ((m = text.match(/drew (\d+)/i))) {
     emit('log-drew', { count: parseInt(m[1], 10), raw: text });
   } else if ((m = text.match(/played (.+?) from/i))) {
     emit('log-played', { card: m[1], raw: text });
   } else if ((m = text.match(/mulliganed (\d+) cards?/i))) {
-    // Mulligan confirmed. The cards toggled "selected" on the mulligan screen are
-    // shuffled to the bottom in random order → one bottom layer. They were never
-    // in .game-card.Hand (the mulligan screen is its own overlay), so they were
-    // never marked drawn — nothing to undo.
-    const n = parseInt(m[1], 10);
-    const named = mulliganSelectedNames.slice(0, n);
-    const anonymous = Math.max(0, n - named.length);
-    state.recycledLayers.push({ named, anonymous });
-    mulliganSelectedNames = [];
-    if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
-    emit('recycled-update', { ...recycledPayload(), raw: text });
+    if (myAction) {
+      // Mulligan confirmed. Cards toggled "selected" on the mulligan screen are
+      // shuffled to the bottom in random order → one bottom layer.
+      const n = parseInt(m[1], 10);
+      const named = mulliganSelectedNames.slice(0, n);
+      const anonymous = Math.max(0, n - named.length);
+      state.recycledLayers.push({ named, anonymous });
+      mulliganSelectedNames = [];
+      if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
+      emit('recycled-update', { ...recycledPayload(), raw: text });
+    }
   } else if (/mulligan/i.test(text)) {
     emit('log-mulligan', { raw: text });
   } else {
@@ -648,7 +679,11 @@ function startObservers() {
   obs.observe(document.body, { childList: true, subtree: true });
   // Counter/hand can also change via in-place updates that add no elements
   // (React reuses nodes), so poll on a timer as well as on mutations.
-  setInterval(() => { checkDeckCounter(); syncHand(); syncMulligan(); }, 1000);
+  // Also lazily detect the local player name (only appears after a game loads).
+  setInterval(() => {
+    if (!localPlayerName) localPlayerName = detectLocalPlayerName();
+    checkDeckCounter(); syncHand(); syncMulligan();
+  }, 1000);
   emit('observer-started', {});
 }
 
@@ -672,17 +707,18 @@ function collectGameData() {
     const mySec = document.querySelector('.player-section.current-player') || sections[0] || null;
     const oppSec = sections.find(s => s !== mySec) || null;
 
-    // "who went first": if firstStarter's name appears in the current-player section's
-    // text content (username label, avatar tooltip, etc.) → Me; in opp section → Opponent.
+    // "who went first": compare firstStarter directly to the detected local player name.
+    // localPlayerName = last .pseudo.my-auto in DOM (opponent is top/first, me is bottom/last).
     let wentFirst = 'Unknown';
-    if (firstStarter) {
-      const myText = mySec ? (mySec.innerText || '') : '';
-      const oppText = oppSec ? (oppSec.innerText || '') : '';
-      if (myText.includes(firstStarter)) wentFirst = 'Me';
-      else if (oppText.includes(firstStarter)) wentFirst = 'Opponent';
+    if (firstStarter && localPlayerName) {
+      wentFirst = firstStarter === localPlayerName ? 'Me' : 'Opponent';
     }
 
-    // Opponent's battlefield: first Battlefields card NOT inside my own section.
+    // Opponent name: the .pseudo.my-auto that isn't the local player.
+    const pseudos = [...document.querySelectorAll('.pseudo.my-auto')];
+    const oppName = pseudos.find(p => p.innerText.trim() !== localPlayerName)?.innerText.trim() || '';
+
+    // Opponent battlefield: first Battlefields card NOT inside my own section.
     let oppBattlefield = nameOfCardIn(oppSec, '.game-card.Battlefields.card-hidden-no');
     if (!oppBattlefield) {
       for (const el of document.querySelectorAll('.game-card.Battlefields.card-hidden-no')) {
@@ -692,16 +728,30 @@ function collectGameData() {
       }
     }
 
+    // Opponent legend: try their section, then scan for Legend/Chosen_Champion outside mine.
+    let oppLegend = nameOfCardIn(oppSec, '.game-card.Chosen_Champion.card-hidden-no') ||
+                    nameOfCardIn(oppSec, '.game-card.Legend.card-hidden-no') || '';
+    if (!oppLegend) {
+      for (const zone of ['Chosen_Champion', 'Legend']) {
+        for (const el of document.querySelectorAll(`.game-card.${zone}.card-hidden-no`)) {
+          if (mySec && mySec.contains(el)) continue;
+          const id = cardIdFromEl(el);
+          if (id) { oppLegend = cardNameFromId(id); break; }
+        }
+        if (oppLegend) break;
+      }
+    }
+
     data = {
       // Prefer Chosen_Champion (the specific deck identity) then Legend on board, then DB snapshot.
       myLegend: nameOfCardIn(mySec, '.game-card.Chosen_Champion.card-hidden-no') ||
                 nameOfCardIn(mySec, '.game-card.Legend.card-hidden-no') ||
                 state.champion || '',
-      oppLegend: nameOfCardIn(oppSec, '.game-card.Chosen_Champion.card-hidden-no') ||
-                 nameOfCardIn(oppSec, '.game-card.Legend.card-hidden-no') || '',
+      oppLegend,
       myBattlefield: nameOfCardIn(mySec, '.game-card.Battlefields.card-hidden-no'),
       oppBattlefield,
       wentFirst,
+      opponent: oppName,
       deck: state.champion || '',
       deckName: '',
       _debug: gatherGameDebug(mySec, oppSec, sections)
