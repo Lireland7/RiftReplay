@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Deck Stats — RiftReplay</title>
+<style>
+  :root {
+    --bg: #0d1017;
+    --panel: #141925;
+    --field: #1b2230;
+    --border: #2a3346;
+    --ink: #e8eaf0;
+    --dim: #8b93a7;
+    --gold: #c9a227;
+    --win: #2dd4a7;
+    --loss: #e0564b;
+    --neutral: #e8eaf0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); }
+  body { font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+
+  header {
+    padding: 10px 18px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); font-weight: 600; flex-shrink: 0; }
+  select.deck-sel {
+    background: var(--field); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--ink); padding: 5px 10px; font: inherit; cursor: pointer; outline: none; min-width: 160px;
+  }
+  select.deck-sel:focus { border-color: var(--gold); }
+  #hdr-total { color: var(--dim); font-size: 12px; margin-left: auto; }
+
+  .tabs {
+    display: flex; border-bottom: 1px solid var(--border);
+    padding: 0 18px; background: var(--panel);
+  }
+  .tab-btn {
+    background: none; border: none; color: var(--dim); cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 9px 14px;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+  .tab-pane { display: none; padding: 14px 18px 28px; }
+  .tab-pane.active { display: block; }
+
+  /* stat grid */
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
+  .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .stat-card h3 { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+  .big-record { font-size: 22px; font-weight: 700; }
+  .big-wr { font-size: 13px; color: var(--dim); margin-left: 6px; }
+  .split-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .split-row:last-child { margin-bottom: 0; }
+  .split-label { color: var(--dim); font-size: 12px; }
+  .split-right { font-variant-numeric: tabular-nums; font-size: 12px; }
+  .split-wr { color: var(--dim); font-size: 11px; margin-left: 5px; }
+  .wr-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 3px; margin-bottom: 6px; }
+  .wr-fill { height: 100%; border-radius: 2px; }
+  .turns-val { font-size: 18px; font-weight: 700; }
+  .turns-sub { color: var(--dim); font-size: 11px; margin-top: 2px; }
+
+  /* card tables */
+  .section-title { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin: 14px 0 6px; }
+  .card-table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .ct-head {
+    display: grid; grid-template-columns: 1fr 90px 54px 120px;
+    gap: 8px; padding: 5px 14px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); background: rgba(0,0,0,.2);
+  }
+  .ct-row {
+    display: grid; grid-template-columns: 1fr 90px 54px 120px;
+    gap: 8px; align-items: center;
+    padding: 7px 14px; font-size: 12px;
+    border-top: 1px solid rgba(255,255,255,.04);
+  }
+  .ct-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ct-rec { font-variant-numeric: tabular-nums; color: var(--dim); }
+  .ct-wr { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+  .more-note { color: var(--dim); font-size: 11px; padding: 6px 14px; border-top: 1px solid rgba(255,255,255,.04); }
+
+  /* legend table */
+  .legend-table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .lt-head {
+    display: grid; grid-template-columns: minmax(120px,1fr) 80px 54px 130px 130px;
+    gap: 8px; padding: 5px 14px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); background: rgba(0,0,0,.2);
+  }
+  .lt-row-wrap { border-top: 1px solid rgba(255,255,255,.04); }
+  .lt-row {
+    display: grid; grid-template-columns: minmax(120px,1fr) 80px 54px 130px 130px;
+    gap: 8px; align-items: center;
+    padding: 8px 14px; font-size: 12px; cursor: pointer; user-select: none;
+  }
+  .lt-row:hover { background: var(--field); }
+  .lt-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lt-rec { font-variant-numeric: tabular-nums; }
+  .lt-wr { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lt-dim { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lt-detail { display: none; border-top: 1px solid var(--border); padding: 10px 14px; background: rgba(0,0,0,.15); }
+  .lt-detail.open { display: block; }
+  .detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .detail-mini { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; }
+  .detail-mini h4 { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+  .sb-ct-head {
+    display: grid; grid-template-columns: 1fr 80px 50px;
+    gap: 8px; padding: 4px 11px;
+    font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); background: rgba(0,0,0,.2); border-radius: 4px 4px 0 0;
+  }
+  .sb-ct-row {
+    display: grid; grid-template-columns: 1fr 80px 50px;
+    gap: 8px; padding: 5px 11px; font-size: 11px;
+    border-top: 1px solid rgba(255,255,255,.04); background: var(--panel);
+  }
+  .sb-ct-row:last-child { border-radius: 0 0 4px 4px; }
+
+  /* ── community tab ── */
+  .sync-bar {
+    padding: 11px 14px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .sync-bar.opted { border-color: rgba(45,212,167,0.25); background: rgba(45,212,167,0.05); }
+  .sync-btn {
+    background: var(--field); border: 1px solid var(--border);
+    color: var(--ink); padding: 6px 14px; border-radius: 6px;
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .sync-btn:hover:not(:disabled) { background: #232c3d; }
+  .sync-btn:disabled { opacity: 0.5; cursor: default; }
+  .sync-btn.primary { background: var(--gold); color: #0d1017; border-color: var(--gold); }
+  .sync-btn.primary:hover { filter: brightness(1.1); }
+
+  /* comparison table */
+  .cmp-table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .cmp-head {
+    display: grid; grid-template-columns: 1fr 70px 100px 70px;
+    gap: 8px; padding: 5px 14px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); background: rgba(0,0,0,.2);
+  }
+  .cmp-row {
+    display: grid; grid-template-columns: 1fr 70px 100px 70px;
+    gap: 8px; align-items: center;
+    padding: 7px 14px; font-size: 12px;
+    border-top: 1px solid rgba(255,255,255,.04);
+  }
+  .cmp-label { color: var(--dim); }
+  .cmp-you, .cmp-community { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .cmp-diff { font-variant-numeric: tabular-nums; font-size: 11px; font-weight: 600; }
+
+  /* legend comparison */
+  .lcmp-table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .lcmp-head {
+    display: grid; grid-template-columns: 1fr 80px 100px 80px;
+    gap: 8px; padding: 5px 14px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); background: rgba(0,0,0,.2);
+  }
+  .lcmp-row {
+    display: grid; grid-template-columns: 1fr 80px 100px 80px;
+    gap: 8px; align-items: center;
+    padding: 7px 14px; font-size: 12px;
+    border-top: 1px solid rgba(255,255,255,.04);
+  }
+  .lcmp-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lcmp-you, .lcmp-community { font-variant-numeric: tabular-nums; }
+  .lcmp-diff { font-size: 11px; font-weight: 600; }
+
+  #empty { padding: 48px 18px; text-align: center; color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Deck Stats</h1>
+  <select class="deck-sel" id="deckSel" onchange="onDeckChange()">
+    <option value="">All Decks</option>
+  </select>
+  <span id="hdr-total"></span>
+</header>
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('deck')">Deck Stats</button>
+  <button class="tab-btn"        onclick="switchTab('legend')">Legend Stats</button>
+  <button class="tab-btn"        onclick="switchTab('community')">Community</button>
+</div>
+<div id="tab-deck"      class="tab-pane active"></div>
+<div id="tab-legend"    class="tab-pane"></div>
+<div id="tab-community" class="tab-pane">
+  <div id="syncBar" class="sync-bar"></div>
+  <div id="communityMain"></div>
+</div>
+
+<script>
+  /* ─── state ─── */
+  let allGames       = [];
+  let communityGames = [];
+  let currentDeck    = '';
+  let communityLoaded = false;
+  let syncState      = { optedIn: false, uploadedCount: 0, lastSync: null };
+
+  /* ─── utils ─── */
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+  function pct(wins, total) { return total ? Math.round((wins / total) * 100) : null; }
+  function wrStr(wins, total) { const p = pct(wins, total); return p === null ? '—' : p + '%'; }
+  function recStr(w, l) { return `${w}–${l}`; }
+  function wrColor(p) {
+    if (p === null) return 'var(--dim)';
+    return p >= 60 ? 'var(--win)' : p <= 40 ? 'var(--loss)' : 'var(--neutral)';
+  }
+  function parseList(str) { return (!str || !str.trim()) ? [] : str.split('|').filter(Boolean); }
+  function avgOf(nums) {
+    const v = nums.filter(n => n !== null && !isNaN(n));
+    return v.length ? (v.reduce((s, n) => s + n, 0) / v.length).toFixed(1) : null;
+  }
+  function winsOf(gs)   { return gs.filter(g => g.result === 'Win').length; }
+  function lossesOf(gs) { return gs.filter(g => g.result === 'Loss').length; }
+  function getDeckId(g) { return g.deck_name || g.deck || 'Unknown'; }
+
+  function groupBy(games, fn) {
+    const m = new Map();
+    for (const g of games) {
+      const k = fn(g) || 'Unknown';
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(g);
+    }
+    return m;
+  }
+  function cardWR(games, field) {
+    const m = new Map();
+    for (const g of games) {
+      for (const card of new Set(parseList(g[field]))) {
+        if (!m.has(card)) m.set(card, { w: 0, l: 0 });
+        const r = m.get(card);
+        if (g.result === 'Win') r.w++; else if (g.result === 'Loss') r.l++;
+      }
+    }
+    return [...m.entries()].sort((a, b) => (b[1].w + b[1].l) - (a[1].w + a[1].l));
+  }
+
+  /* ─── tab control ─── */
+  function switchTab(name) {
+    const names = ['deck','legend','community'];
+    document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', names[i] === name));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    if (name === 'community' && !communityLoaded && syncState.optedIn) loadCommunity();
+  }
+
+  function onDeckChange() {
+    currentDeck = document.getElementById('deckSel').value;
+    render();
+    if (communityLoaded) renderCommunityMain();
+  }
+
+  /* ─── data helpers ─── */
+  function filteredGames()          { return currentDeck ? allGames.filter(g => getDeckId(g) === currentDeck) : allGames; }
+  function filteredCommunityGames() {
+    if (!currentDeck) return communityGames;
+    return communityGames.filter(g =>
+      getDeckId(g) === currentDeck || g.my_legend === currentDeck);
+  }
+
+  /* ─── render primitives ─── */
+  function bar(p, color) {
+    return `<div class="wr-bar"><div class="wr-fill" style="width:${p??0}%;background:${color}"></div></div>`;
+  }
+  function splitRows(pairs) {
+    return pairs.map(([label, gs]) => {
+      const w = winsOf(gs), l = lossesOf(gs), t = gs.length;
+      const p = pct(w, t), col = wrColor(p);
+      return `
+        <div class="split-row">
+          <span class="split-label">${esc(label)}</span>
+          <span class="split-right" style="color:${col}">${recStr(w,l)}<span class="split-wr">${wrStr(w,t)}</span></span>
+        </div>${bar(p, col)}`;
+    }).join('');
+  }
+  function cardTableHtml(title, entries, maxRows = 30) {
+    if (!entries.length) return '';
+    const rows = entries.slice(0, maxRows).map(([name, r]) => {
+      const t = r.w + r.l, p = pct(r.w, t), col = wrColor(p);
+      return `<div class="ct-row">
+        <span class="ct-name">${esc(name)}</span>
+        <span class="ct-rec">${recStr(r.w,r.l)}</span>
+        <span class="ct-wr" style="color:${col}">${wrStr(r.w,t)}</span>
+        <div>${bar(p,col)}</div>
+      </div>`;
+    }).join('');
+    const extra = entries.length > maxRows
+      ? `<div class="more-note">+${entries.length - maxRows} more cards not shown</div>` : '';
+    return `<p class="section-title">${esc(title)}</p>
+      <div class="card-table">
+        <div class="ct-head"><span>Card</span><span>Record</span><span>WR</span><span>Bar</span></div>
+        ${rows}${extra}
+      </div>`;
+  }
+
+  /* ─── DECK STATS (shared, returns HTML string) ─── */
+  function buildDeckStatsHtml(games) {
+    const w = winsOf(games), l = lossesOf(games), t = games.length;
+    const p = pct(w, t), col = wrColor(p);
+
+    const firstGs  = games.filter(g => g.who_went_first === 'Me');
+    const secondGs = games.filter(g => g.who_went_first === 'Opponent');
+
+    const bfGroups = [...groupBy(games, g => g.my_battlefield || '').entries()]
+      .filter(([k]) => k && k !== 'Unknown').sort((a,b) => b[1].length - a[1].length);
+
+    const mulGs  = games.filter(g => g.took_mulligan === 'yes');
+    const keptGs = games.filter(g => g.took_mulligan === 'no');
+
+    const atAll  = avgOf(games.map(g => g.turns ? parseInt(g.turns) : null));
+    const atWin  = avgOf(games.filter(g => g.result==='Win').map(g => g.turns ? parseInt(g.turns) : null));
+    const atLoss = avgOf(games.filter(g => g.result==='Loss').map(g => g.turns ? parseInt(g.turns) : null));
+
+    const sbYes = games.filter(g => parseList(g.sideboard_cards_drawn).length > 0);
+    const sbNo  = games.filter(g => parseList(g.sideboard_cards_drawn).length === 0);
+
+    const mullCards  = cardWR(games, 'mulligan_cards');
+    const drawnCards = cardWR(games, 'cards_drawn');
+
+    const bfHtml = bfGroups.slice(0,5).map(([k,gs]) => {
+      const bw=winsOf(gs),bl=lossesOf(gs),bt=gs.length,bp=pct(bw,bt),bc=wrColor(bp);
+      return `<div class="split-row"><span class="split-label">${esc(k)}</span><span class="split-right" style="color:${bc}">${recStr(bw,bl)}<span class="split-wr">${wrStr(bw,bt)}</span></span></div>${bar(bp,bc)}`;
+    }).join('') || '<span style="color:var(--dim);font-size:12px">No data yet</span>';
+
+    return `
+      <div class="stat-grid">
+        <div class="stat-card">
+          <h3>Overall</h3>
+          <div><span class="big-record" style="color:${col}">${recStr(w,l)}</span><span class="big-wr">${wrStr(w,t)}</span></div>
+          ${bar(p,col)}
+          <div style="color:var(--dim);font-size:11px;margin-top:4px">${t} game${t!==1?'s':''}</div>
+        </div>
+        <div class="stat-card"><h3>Going First W/R</h3>${splitRows([['First',firstGs],['Second',secondGs]])}</div>
+        <div class="stat-card"><h3>Battlefield W/R</h3>${bfHtml}</div>
+        <div class="stat-card"><h3>Mulligan W/R</h3>${splitRows([['Mulliganed',mulGs],['Kept hand',keptGs]])}</div>
+        <div class="stat-card">
+          <h3>Average Turns</h3>
+          <div style="margin-bottom:8px"><span class="turns-val">${atAll??'—'}</span><span class="turns-sub"> all games</span></div>
+          <div class="split-row"><span class="split-label">Wins</span><span class="split-right" style="color:var(--win)">${atWin??'—'}</span></div>
+          <div class="split-row"><span class="split-label">Losses</span><span class="split-right" style="color:var(--loss)">${atLoss??'—'}</span></div>
+        </div>
+        <div class="stat-card"><h3>Sideboard Draw Impact</h3>${splitRows([['Drew SB card',sbYes],['No SB card',sbNo]])}</div>
+      </div>
+      ${cardTableHtml('Mulligan Away W/R', mullCards)}
+      ${cardTableHtml('Drawn W/R', drawnCards)}`;
+  }
+
+  function renderDeckStats(games) {
+    document.getElementById('tab-deck').innerHTML = buildDeckStatsHtml(games);
+  }
+
+  /* ─── LEGEND STATS ─── */
+  function renderLegendStats(games) {
+    const legendMap = groupBy(games, g => g.opp_legend || 'Unknown');
+    const legends = [...legendMap.entries()].sort((a,b) => b[1].length - a[1].length);
+    if (!legends.length) { document.getElementById('tab-legend').innerHTML = '<div id="empty">No games recorded yet.</div>'; return; }
+
+    const rows = legends.map(([legend, gs], idx) => {
+      const w=winsOf(gs),l=lossesOf(gs),t=gs.length,p=pct(w,t),col=wrColor(p);
+      const firstGs=gs.filter(g=>g.who_went_first==='Me');
+      const secondGs=gs.filter(g=>g.who_went_first==='Opponent');
+      const bfGroups=[...groupBy(gs,g=>g.my_battlefield||'').entries()].filter(([k])=>k&&k!=='Unknown').sort((a,b)=>b[1].length-a[1].length);
+      const sbYes=gs.filter(g=>parseList(g.sideboard_cards_drawn).length>0);
+      const sbNo=gs.filter(g=>parseList(g.sideboard_cards_drawn).length===0);
+      const sbCards=cardWR(gs,'sideboard_cards_drawn');
+      const fw=winsOf(firstGs),sw=winsOf(secondGs),sbyw=winsOf(sbYes),sbnw=winsOf(sbNo);
+      const fp=pct(fw,firstGs.length),sp2=pct(sw,secondGs.length),sbYp=pct(sbyw,sbYes.length),sbNp=pct(sbnw,sbNo.length);
+      return `
+        <div class="lt-row-wrap">
+          <div class="lt-row" onclick="toggleDetail('ld${idx}')">
+            <span class="lt-name">${esc(legend)}</span>
+            <span class="lt-rec">${recStr(w,l)}</span>
+            <span class="lt-wr" style="color:${col}">${wrStr(w,t)}</span>
+            <span class="lt-dim">First ${wrStr(fw,firstGs.length)} · 2nd ${wrStr(sw,secondGs.length)}</span>
+            <span class="lt-dim">SB ${wrStr(sbyw,sbYes.length)} · No SB ${wrStr(sbnw,sbNo.length)}</span>
+          </div>
+          <div class="lt-detail" id="ld${idx}">
+            <div class="detail-grid">
+              <div class="detail-mini">
+                <h4>Seat</h4>
+                <div class="split-row"><span class="split-label">First</span><span class="split-right" style="color:${wrColor(fp)}">${recStr(fw,firstGs.length-fw)}<span class="split-wr">${wrStr(fw,firstGs.length)}</span></span></div>${bar(fp,wrColor(fp))}
+                <div class="split-row"><span class="split-label">Second</span><span class="split-right" style="color:${wrColor(sp2)}">${recStr(sw,secondGs.length-sw)}<span class="split-wr">${wrStr(sw,secondGs.length)}</span></span></div>${bar(sp2,wrColor(sp2))}
+              </div>
+              <div class="detail-mini">
+                <h4>Battlefield</h4>
+                ${bfGroups.slice(0,3).map(([k,bgs])=>{const bw=winsOf(bgs),bl=lossesOf(bgs),bt=bgs.length,bp=pct(bw,bt);return `<div class="split-row"><span class="split-label">${esc(k)}</span><span class="split-right" style="color:${wrColor(bp)}">${recStr(bw,bl)}<span class="split-wr">${wrStr(bw,bt)}</span></span></div>`;}).join('')||'<span style="color:var(--dim)">—</span>'}
+              </div>
+              <div class="detail-mini">
+                <h4>Sideboard Draw</h4>
+                <div class="split-row"><span class="split-label">Drew SB</span><span class="split-right" style="color:${wrColor(sbYp)}">${recStr(sbyw,sbYes.length-sbyw)}<span class="split-wr">${wrStr(sbyw,sbYes.length)}</span></span></div>${bar(sbYp,wrColor(sbYp))}
+                <div class="split-row"><span class="split-label">No SB card</span><span class="split-right" style="color:${wrColor(sbNp)}">${recStr(sbnw,sbNo.length-sbnw)}<span class="split-wr">${wrStr(sbnw,sbNo.length)}</span></span></div>${bar(sbNp,wrColor(sbNp))}
+              </div>
+            </div>
+            ${sbCards.length?`<div style="margin-top:8px"><div class="sb-ct-head"><span>Sideboard card drawn</span><span>Record</span><span>WR</span></div>${sbCards.slice(0,8).map(([n,r])=>{const st=r.w+r.l,sp=pct(r.w,st);return `<div class="sb-ct-row"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(n)}</span><span>${recStr(r.w,r.l)}</span><span style="color:${wrColor(sp)};font-weight:600">${wrStr(r.w,st)}</span></div>`;}).join('')}</div>`:''}
+          </div>
+        </div>`;
+    }).join('');
+
+    document.getElementById('tab-legend').innerHTML = `
+      <div class="legend-table">
+        <div class="lt-head"><span>Opponent Legend</span><span>Record</span><span>WR</span><span>Seat</span><span>Sideboard</span></div>
+        ${rows}
+      </div>`;
+  }
+
+  function toggleDetail(id) { document.getElementById(id)?.classList.toggle('open'); }
+
+  /* ─── COMMUNITY TAB ─── */
+  function renderSyncBar() {
+    const el = document.getElementById('syncBar');
+    if (!syncState.optedIn) {
+      el.className = 'sync-bar';
+      el.innerHTML = `
+        <div style="flex:1">
+          <div style="font-weight:600;margin-bottom:3px">Share your stats with the RiftReplay community</div>
+          <div style="color:var(--dim);font-size:12px">Upload your match data anonymously — no account required. Opt in to contribute and view global stats.</div>
+        </div>
+        <button class="sync-btn primary" onclick="handleSubmit()">Submit Stats</button>`;
+      return;
+    }
+    const date = syncState.lastSync
+      ? new Date(syncState.lastSync).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })
+      : '—';
+    el.className = 'sync-bar opted';
+    el.innerHTML = `
+      <div style="color:var(--win);font-size:18px;line-height:1;flex-shrink:0">✓</div>
+      <div style="flex:1;font-size:12px">
+        <b>${syncState.uploadedCount}</b> games shared
+        <span style="color:var(--dim);margin-left:8px">Last synced ${date}</span>
+      </div>
+      <span id="syncStatus" style="color:var(--dim);font-size:11px"></span>
+      <button class="sync-btn" id="submitBtn" onclick="handleSubmit()">Sync Now</button>`;
+  }
+
+  async function handleSubmit() {
+    const btn = document.getElementById('submitBtn');
+    const statusEl = document.getElementById('syncStatus');
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+    const result = await window.deckStats.submitStats();
+    if (result.error) {
+      if (btn) { btn.disabled = false; btn.textContent = syncState.optedIn ? 'Retry' : 'Submit Stats'; }
+      if (statusEl) statusEl.textContent = 'Upload failed';
+      return;
+    }
+    syncState = { optedIn: true, uploadedCount: result.uploaded, lastSync: new Date().toISOString() };
+    renderSyncBar();
+    if (!communityLoaded) loadCommunity();
+    else renderCommunityMain();
+  }
+
+  async function loadCommunity() {
+    document.getElementById('communityMain').innerHTML = '<div id="empty">Loading community data…</div>';
+    const result = await window.deckStats.getCommunityStats();
+    if (result.error) {
+      document.getElementById('communityMain').innerHTML =
+        `<div id="empty" style="color:var(--loss)">Failed to load: ${esc(result.error)}</div>`;
+      return;
+    }
+    communityGames = result.games;
+    communityLoaded = true;
+    renderCommunityMain();
+  }
+
+  function buildComparisonHtml(myGs, cGs) {
+    // Key stat rows
+    const rows = [
+      ['Overall',      myGs,                                           cGs],
+      ['Going First',  myGs.filter(g=>g.who_went_first==='Me'),        cGs.filter(g=>g.who_went_first==='Me')],
+      ['Going Second', myGs.filter(g=>g.who_went_first==='Opponent'),  cGs.filter(g=>g.who_went_first==='Opponent')],
+      ['Mulliganed',   myGs.filter(g=>g.took_mulligan==='yes'),        cGs.filter(g=>g.took_mulligan==='yes')],
+      ['Kept Hand',    myGs.filter(g=>g.took_mulligan==='no'),         cGs.filter(g=>g.took_mulligan==='no')],
+      ['Drew SB Card', myGs.filter(g=>parseList(g.sideboard_cards_drawn).length>0), cGs.filter(g=>parseList(g.sideboard_cards_drawn).length>0)],
+    ].map(([label, mg, cg]) => {
+      const mw=winsOf(mg),mt=mg.length,cw=winsOf(cg),ct=cg.length;
+      const mp=pct(mw,mt),cp2=pct(cw,ct);
+      const diff = mp!==null && cp2!==null ? mp-cp2 : null;
+      const diffStr = diff===null ? '—' : diff>0 ? `↑ +${diff}%` : diff<0 ? `↓ ${diff}%` : '=';
+      const diffCol = diff===null ? 'var(--dim)' : diff>0 ? 'var(--win)' : diff<0 ? 'var(--loss)' : 'var(--dim)';
+      return `<div class="cmp-row">
+        <span class="cmp-label">${esc(label)}</span>
+        <span class="cmp-you" style="color:${wrColor(mp)}">${wrStr(mw,mt)}</span>
+        <span class="cmp-community" style="color:${wrColor(cp2)}">${wrStr(cw,ct)}</span>
+        <span class="cmp-diff" style="color:${diffCol}">${diffStr}</span>
+      </div>`;
+    }).join('');
+
+    // Average turns comparison
+    const myAt  = avgOf(myGs.map(g=>g.turns?parseInt(g.turns):null));
+    const cAt   = avgOf(cGs.map(g=>g.turns?parseInt(g.turns):null));
+    const atDiff = (myAt!==null && cAt!==null) ? (parseFloat(myAt)-parseFloat(cAt)).toFixed(1) : null;
+    const atDiffStr = atDiff===null ? '—' : parseFloat(atDiff)<0 ? `↑ ${atDiff}` : parseFloat(atDiff)>0 ? `↓ +${atDiff}` : '=';
+    const atDiffCol = atDiff===null ? 'var(--dim)' : parseFloat(atDiff)<0 ? 'var(--win)' : parseFloat(atDiff)>0 ? 'var(--loss)' : 'var(--dim)';
+
+    // Legend matchup comparison
+    const myLegMap = groupBy(myGs, g=>g.opp_legend||'Unknown');
+    const cLegMap  = groupBy(cGs,  g=>g.opp_legend||'Unknown');
+    const legends  = [...new Set([...myLegMap.keys(), ...cLegMap.keys()])]
+      .filter(k => k !== 'Unknown')
+      .sort((a,b) => (myLegMap.get(b)?.length||0)-(myLegMap.get(a)?.length||0));
+
+    const legRows = legends.map(legend => {
+      const mg=myLegMap.get(legend)||[], cg=cLegMap.get(legend)||[];
+      const mw=winsOf(mg),mt=mg.length,cw=winsOf(cg),ct=cg.length;
+      const mp=pct(mw,mt),cp2=pct(cw,ct);
+      const diff=mp!==null&&cp2!==null?mp-cp2:null;
+      const diffStr=diff===null?'—':diff>0?`↑ +${diff}%`:diff<0?`↓ ${diff}%`:'=';
+      const diffCol=diff===null?'var(--dim)':diff>0?'var(--win)':diff<0?'var(--loss)':'var(--dim)';
+      return `<div class="lcmp-row">
+        <span class="lcmp-name">${esc(legend)}</span>
+        <span class="lcmp-you" style="color:${wrColor(mp)}">${mt?recStr(mw,mt-mw)+' '+wrStr(mw,mt):'—'}</span>
+        <span class="lcmp-community" style="color:${wrColor(cp2)}">${ct?wrStr(cw,ct):'—'}</span>
+        <span class="lcmp-diff" style="color:${diffCol}">${diffStr}</span>
+      </div>`;
+    }).join('');
+
+    return `
+      <p class="section-title">Your Stats vs Community</p>
+      <div class="cmp-table">
+        <div class="cmp-head"><span>Stat</span><span>You</span><span>Community</span><span>Diff</span></div>
+        ${rows}
+        <div class="cmp-row">
+          <span class="cmp-label">Avg Turns</span>
+          <span class="cmp-you">${myAt??'—'}</span>
+          <span class="cmp-community">${cAt??'—'}</span>
+          <span class="cmp-diff" style="color:${atDiffCol}">${atDiffStr}</span>
+        </div>
+      </div>
+      ${legends.length ? `
+        <p class="section-title">Legend Matchup vs Community</p>
+        <div class="lcmp-table">
+          <div class="lcmp-head"><span>vs Legend</span><span>Your Record</span><span>Community WR</span><span>Diff</span></div>
+          ${legRows}
+        </div>` : ''}`;
+  }
+
+  function renderCommunityMain() {
+    const cGs = filteredCommunityGames();
+    const myGs = filteredGames();
+    const players = new Set(cGs.map(g => g.device_id)).size;
+
+    if (!cGs.length) {
+      document.getElementById('communityMain').innerHTML =
+        '<div id="empty">No community data yet — be the first to submit!</div>';
+      return;
+    }
+
+    document.getElementById('communityMain').innerHTML = `
+      <p style="color:var(--dim);font-size:11px;margin-bottom:10px">
+        ${cGs.length.toLocaleString()} games · ${players.toLocaleString()} player${players!==1?'s':''}
+        ${currentDeck ? ` · filtered to <b style="color:var(--ink)">${esc(currentDeck)}</b>` : ''}
+      </p>
+      ${buildDeckStatsHtml(cGs)}
+      ${myGs.length ? buildComparisonHtml(myGs, cGs) : ''}`;
+  }
+
+  /* ─── main render ─── */
+  function render() {
+    const games = filteredGames();
+    const t = games.length;
+    document.getElementById('hdr-total').textContent =
+      t ? `${winsOf(games)}–${lossesOf(games)} · ${t} game${t!==1?'s':''}` : '';
+    if (!t) {
+      document.getElementById('tab-deck').innerHTML   = '<div id="empty">No games recorded yet.</div>';
+      document.getElementById('tab-legend').innerHTML = '<div id="empty">No games recorded yet.</div>';
+      return;
+    }
+    renderDeckStats(games);
+    renderLegendStats(games);
+  }
+
+  /* ─── init ─── */
+  async function init() {
+    const [games, sync] = await Promise.all([
+      window.deckStats.getGames(),
+      window.deckStats.getSyncState()
+    ]);
+    allGames   = games;
+    syncState  = sync;
+
+    const decks = [...new Set(games.map(getDeckId).filter(d => d && d !== 'Unknown'))].sort();
+    const sel = document.getElementById('deckSel');
+    for (const d of decks) {
+      const opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      sel.appendChild(opt);
+    }
+
+    renderSyncBar();
+    render();
+
+    // Auto-load community data if already opted in
+    if (syncState.optedIn) loadCommunity();
+  }
+
+  init();
+</script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Match History — RiftReplay</title>
+<style>
+  :root {
+    --bg: #0d1017;
+    --panel: #141925;
+    --field: #1b2230;
+    --border: #2a3346;
+    --ink: #e8eaf0;
+    --dim: #8b93a7;
+    --gold: #c9a227;
+    --win: #2dd4a7;
+    --loss: #e0564b;
+    --draw: #8b93a7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--ink); height: 100%; }
+  body { font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+
+  header {
+    padding: 12px 18px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 {
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--gold); font-weight: 600;
+  }
+
+  #matches { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+  #empty { padding: 48px 18px; text-align: center; color: var(--dim); }
+
+  .match-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .match-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; cursor: pointer;
+    user-select: none;
+  }
+  .match-head:hover { background: var(--field); }
+
+  .result-badge {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+    padding: 2px 8px; border-radius: 4px; flex-shrink: 0;
+  }
+  .result-badge.W { background: rgba(45,212,167,0.15); color: var(--win); }
+  .result-badge.L { background: rgba(224,86,75,0.15);  color: var(--loss); }
+  .result-badge.D { background: rgba(139,147,167,0.15); color: var(--draw); }
+
+  .match-vs { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .match-vs .sub { color: var(--dim); font-weight: 400; font-size: 11px; margin-left: 6px; }
+  .match-date { color: var(--dim); font-size: 11px; flex-shrink: 0; }
+
+  .match-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .btn-expand {
+    background: none; border: none; color: var(--dim);
+    cursor: pointer; font-size: 11px; padding: 3px 6px;
+    font-family: inherit;
+  }
+  .btn-expand:hover { color: var(--ink); }
+  .btn-delete {
+    background: none; border: 1px solid rgba(224,86,75,0.35);
+    color: var(--loss); cursor: pointer; font-size: 11px;
+    padding: 3px 9px; border-radius: 4px; font-family: inherit;
+  }
+  .btn-delete:hover { background: rgba(224,86,75,0.1); }
+
+  .match-games { display: none; border-top: 1px solid var(--border); }
+  .match-games.open { display: block; }
+
+  .games-header {
+    display: grid;
+    grid-template-columns: 32px 52px 100px 1fr 1fr 60px;
+    gap: 8px; align-items: center;
+    padding: 5px 14px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--dim); background: rgba(0,0,0,0.18);
+  }
+  .game-row {
+    display: grid;
+    grid-template-columns: 32px 52px 100px 1fr 1fr 60px;
+    gap: 8px; align-items: center;
+    padding: 7px 14px; font-size: 12px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .g-num  { color: var(--dim); }
+  .g-result { font-weight: 600; }
+  .g-result.Win  { color: var(--win); }
+  .g-result.Loss { color: var(--loss); }
+  .g-result.Draw { color: var(--draw); }
+  .g-dim  { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-legends { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-score { text-align: right; color: var(--dim); }
+</style>
+</head>
+<body>
+<header><h1>Match History</h1></header>
+<div id="matches"><div id="empty">Loading…</div></div>
+
+<script>
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  function fmtDate(ts) {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }); }
+    catch { return ts.slice(0, 10); }
+  }
+
+  function matchResult(games) {
+    const wins   = games.filter(g => g.result === 'Win').length;
+    const losses = games.filter(g => g.result === 'Loss').length;
+    const letter = wins > losses ? 'W' : losses > wins ? 'L' : 'D';
+    return { letter, wins, losses };
+  }
+
+  function render(matches) {
+    const el = document.getElementById('matches');
+    if (!matches.length) {
+      el.innerHTML = '<div id="empty">No matches recorded yet.</div>';
+      return;
+    }
+
+    el.innerHTML = matches.map(match => {
+      const { letter, wins, losses } = matchResult(match.games);
+      const g0       = match.games[0] || {};
+      const oppLabel = g0.opp_legend || g0.opponent || '?';
+      const myLabel  = g0.deck_name  || g0.my_legend || g0.deck || '';
+      const format   = g0.format || '';
+      const date     = fmtDate(match.games[match.games.length - 1]?.timestamp);
+      const safeId   = esc(match.id);
+
+      const gameRows = match.games.map(g => `
+        <div class="game-row">
+          <span class="g-num">G${esc(g.game_no)}</span>
+          <span class="g-result ${esc(g.result)}">${esc(g.result)}</span>
+          <span class="g-dim">${esc(g.who_went_first || '—')} first</span>
+          <span class="g-legends">${esc(g.my_legend || g.deck || '—')} vs ${esc(g.opp_legend || '—')}</span>
+          <span class="g-dim">${esc(g.my_battlefield || '—')}</span>
+          <span class="g-score">${g.my_score !== '' ? esc(g.my_score) + '–' + esc(g.opp_score) : '—'}</span>
+        </div>`).join('');
+
+      return `
+        <div class="match-card">
+          <div class="match-head" onclick="toggleGames('${safeId}')">
+            <span class="result-badge ${letter}">${letter} ${wins}–${losses}</span>
+            <span class="match-vs">vs. ${esc(oppLabel)}<span class="sub">${format ? '· ' + esc(format) : ''} ${myLabel ? '· ' + esc(myLabel) : ''}</span></span>
+            <span class="match-date">${esc(date)}</span>
+            <div class="match-actions" onclick="event.stopPropagation()">
+              <button class="btn-expand" id="btn-${safeId}" onclick="toggleGames('${safeId}')">▾ Details</button>
+              <button class="btn-delete" onclick="confirmDelete('${safeId}')">Delete</button>
+            </div>
+          </div>
+          <div class="match-games" id="games-${safeId}">
+            <div class="games-header">
+              <span>#</span><span>Result</span><span>Seat</span>
+              <span>Legends</span><span>Battlefield</span><span>Score</span>
+            </div>
+            ${gameRows}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function toggleGames(id) {
+    const panel = document.getElementById('games-' + id);
+    const btn   = document.getElementById('btn-'   + id);
+    const open  = panel.classList.toggle('open');
+    btn.textContent = open ? '▴ Details' : '▾ Details';
+  }
+
+  async function confirmDelete(id) {
+    if (!confirm('Delete this entire match? This cannot be undone.')) return;
+    const matches = await window.matchHistory.deleteMatch(id);
+    render(matches);
+  }
+
+  window.matchHistory.getMatches().then(render);
+</script>
+</body>
+</html>

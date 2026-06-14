@@ -44,15 +44,19 @@
     font-weight: 600;
   }
   .head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  #record {
-    -webkit-app-region: no-drag;        /* keep the button clickable */
+  .head-btns {
+    -webkit-app-region: no-drag;
+    display: flex; gap: 5px; align-items: center;
+  }
+  #record, #history, #statsBtn {
     background: #1b2230;
     border: 1px solid rgba(201,162,39,0.4);
     color: var(--gold);
     font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
     padding: 4px 9px; border-radius: 6px; cursor: pointer;
   }
-  #record:hover { background: #232c3d; }
+  #record:hover, #history:hover, #statsBtn:hover { background: #232c3d; }
+  #history, #statsBtn { border-color: rgba(139,147,167,0.35); color: var(--dim); }
   #champion { color: var(--dim); font-size: 12px; margin-top: 2px; }
   #stats {
     display: flex;
@@ -120,7 +124,11 @@
   <header>
     <div class="head-row">
       <h1>RiftReplay</h1>
-      <button id="record" title="Record this game (Ctrl+Shift+R)">+ Record game</button>
+      <div class="head-btns">
+        <button id="statsBtn" title="Deck stats">Stats</button>
+        <button id="history" title="View match history">History</button>
+        <button id="record" title="Record this game (Ctrl+Shift+R)">+ Record</button>
+      </div>
     </div>
     <div id="champion">Waiting for game…</div>
   </header>
@@ -150,6 +158,8 @@
   const $ = id => document.getElementById(id);
 
   $('record').onclick = () => window.tracker.openRecordForm();
+  $('history').onclick = () => window.tracker.openMatchHistory();
+  $('statsBtn').onclick = () => window.tracker.openStats();
 
   // Escape card names before interpolating into innerHTML — names come from the
   // external card DB / game DOM, so treat them as untrusted to avoid XSS.

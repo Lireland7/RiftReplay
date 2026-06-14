@@ -35,7 +35,13 @@ const state = {
   // to each other; layers stack in draw order (earliest-recycled is drawn first
   // once the deck cycles down to the bottom). Each layer: { named: [name,...],
   // anonymous: <count of unknown copies> }.
-  recycledLayers: []
+  recycledLayers: [],
+  // Per-game stats tracking (reset on new game, sent via collectGameData).
+  drawnCards: [],         // card name each time a draw is recorded (may repeat)
+  tookMulligan: false,    // true if player mulliganed away ≥1 card
+  mulliganCardNames: [],  // names of cards sent to bottom during mulligan
+  turnCount: 0,           // approximate number of turns taken (post-opening-hand draws)
+  openingHandDone: false  // set after the first "drew N" log entry
 };
 
 // ---------------------------------------------------------- scry window -----
@@ -222,6 +228,11 @@ function resetGameState() {
   state.champion = null;
   state.recycledLayers = [];
   state.deckSnapshotTaken = false;
+  state.drawnCards = [];
+  state.tookMulligan = false;
+  state.mulliganCardNames = [];
+  state.turnCount = 0;
+  state.openingHandDone = false;
   lastDeckCount = null;
   pendingDraws = 0;
   clearTimeout(pendingTimer);
@@ -448,6 +459,7 @@ function checkDeckCounter() {
 function markDrawn(id, name, source) {
   const entry = state.deck.get(name);
   if (entry && entry.drawn < entry.total) entry.drawn += 1;
+  state.drawnCards.push(name);
   emit('card-drawn', {
     id, name, source,
     remaining: entry ? entry.total - entry.drawn : null
@@ -566,6 +578,7 @@ function syncHand() {
       const entry = state.deck.get(name);
       if (!entry || entry.drawn >= entry.total) break; // this card maxed out
       entry.drawn += 1;
+      state.drawnCards.push(name);
       emit('card-drawn', {
         id: null, name, source: 'hand',
         remaining: entry.total - entry.drawn
@@ -646,6 +659,10 @@ function handleHistoryAddition(node) {
       emit('recycled-update', { ...recycledPayload(), raw: text });
     }
   } else if ((m = text.match(/drew (\d+)/i))) {
+    if (myAction) {
+      if (!state.openingHandDone) { state.openingHandDone = true; }
+      else { state.turnCount++; }
+    }
     emit('log-drew', { count: parseInt(m[1], 10), raw: text });
   } else if ((m = text.match(/played (.+?) from/i))) {
     emit('log-played', { card: m[1], raw: text });
@@ -657,6 +674,7 @@ function handleHistoryAddition(node) {
       const named = mulliganSelectedNames.slice(0, n);
       const anonymous = Math.max(0, n - named.length);
       state.recycledLayers.push({ named, anonymous });
+      if (n > 0) { state.tookMulligan = true; state.mulliganCardNames = named.slice(); }
       mulliganSelectedNames = [];
       if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
       emit('recycled-update', { ...recycledPayload(), raw: text });
@@ -793,6 +811,11 @@ function collectGameData() {
       oppScore: readPlayerScore(oppPseudo) ?? '',
       deck: state.champion || '',
       deckName: '',
+      tookMulligan: state.tookMulligan,
+      mulliganCards: state.mulliganCardNames.join('|'),
+      turns: state.turnCount > 0 ? state.turnCount : '',
+      cardsDrawn: state.drawnCards.join('|'),
+      sideboardCardsDrawn: state.drawnCards.filter(n => state.sideboard.has(n)).join('|'),
       _debug: gatherGameDebug(mySec, oppSec, sections)
     };
   } catch (e) {

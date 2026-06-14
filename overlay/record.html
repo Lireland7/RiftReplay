@@ -139,6 +139,17 @@
       <input id="deckName" type="text">
     </div>
 
+    <div class="field">
+      <label for="turns">Turns (approx.)</label>
+      <input id="turns" type="number" min="0" placeholder="Auto-detected">
+    </div>
+    <div class="field">
+      <label>Mulligan</label>
+      <div class="extra-row">
+        <label class="chk"><input type="checkbox" id="tookMulligan"> Took mulligan</label>
+      </div>
+    </div>
+
     <div class="field span2">
       <label>Extra battlefield</label>
       <div class="extra-row">
@@ -147,6 +158,11 @@
       </div>
       <div class="hint">Only saved when ticked. Kept separate from normal battlefield stats.</div>
     </div>
+
+    <!-- Hidden passthrough fields (auto-detected, not user-editable) -->
+    <input type="hidden" id="mulliganCards">
+    <input type="hidden" id="cardsDrawn">
+    <input type="hidden" id="sideboardCardsDrawn">
   </div>
 
   <footer>
@@ -159,7 +175,7 @@
   const $ = id => document.getElementById(id);
   const fields = ['result','format','seat','opponent','myScore','oppScore',
     'wentFirst','myLegend','oppLegend','myBattlefield','oppBattlefield',
-    'deck','deckName'];
+    'deck','deckName','turns','mulliganCards','cardsDrawn','sideboardCardsDrawn'];
 
   function setVal(id, v) {
     if (v === undefined || v === null || v === '') return;
@@ -171,6 +187,7 @@
     for (const f of fields) setVal(f, data[f]);
     if (data.baronPit) $('baronPit').checked = true;
     if (data.brush) $('brush').checked = true;
+    if (data.tookMulligan) $('tookMulligan').checked = true;
     const g = data.gameNo || 1;
     $('matchline').innerHTML = data.matchInProgress
       ? `Continuing match — recording <b>game ${g}</b>.`
@@ -182,6 +199,7 @@
     for (const f of fields) d[f] = $(f).value;
     d.baronPit = $('baronPit').checked;
     d.brush = $('brush').checked;
+    d.tookMulligan = $('tookMulligan').checked;
     return d;
   }
 

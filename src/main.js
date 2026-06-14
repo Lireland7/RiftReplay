@@ -7,10 +7,20 @@
 const { app, BrowserWindow, ipcMain, screen, shell, session, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { randomUUID } = require('crypto');
+
+// ─── Supabase config ─────────────────────────────────────────────────────────
+// Fill in your Project URL and anon key from supabase.com → Settings → API.
+// The anon key is intentionally public — it is protected by Row Level Security.
+const SUPABASE_URL = 'https://xgylbxjehhsmmkhphwrl.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhneWxieGplaGhzbW1raHBod3JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE0NDY0MDYsImV4cCI6MjA5NzAyMjQwNn0.XHgXTeD44wVVZjNO37vmV_b-BljAGRKZ5RRd1MnK5u0';
+// ─────────────────────────────────────────────────────────────────────────────
 
 let gameWin = null;
 let overlayWin = null;
 let recordWin = null;
+let historyWin = null;
+let statsWin = null;
 
 // The only origin the game window is allowed to load in-app.
 const GAME_ORIGIN = 'https://tcg-arena.fr';
@@ -173,7 +183,8 @@ const CSV_HEADER = [
   'timestamp', 'match_id', 'game_no', 'match_complete', 'result', 'format',
   'seat', 'who_went_first', 'opponent', 'my_score', 'opp_score', 'my_legend',
   'opp_legend', 'my_battlefield', 'opp_battlefield', 'baron_pit', 'brush',
-  'deck', 'deck_name'
+  'deck', 'deck_name',
+  'took_mulligan', 'mulligan_cards', 'turns', 'cards_drawn', 'sideboard_cards_drawn'
 ];
 
 function csvEscape(v) {
@@ -202,7 +213,12 @@ function saveGameRow(data, action) {
     my_legend: data.myLegend, opp_legend: data.oppLegend,
     my_battlefield: data.myBattlefield, opp_battlefield: data.oppBattlefield,
     baron_pit: data.baronPit ? 'yes' : '', brush: data.brush ? 'yes' : '',
-    deck: data.deck, deck_name: data.deckName
+    deck: data.deck, deck_name: data.deckName,
+    took_mulligan: data.tookMulligan ? 'yes' : 'no',
+    mulligan_cards: data.mulliganCards || '',
+    turns: data.turns || '',
+    cards_drawn: data.cardsDrawn || '',
+    sideboard_cards_drawn: data.sideboardCardsDrawn || ''
   };
 
   let out = newFile ? CSV_HEADER.join(',') + '\n' : '';
@@ -224,6 +240,238 @@ function saveGameRow(data, action) {
   }
   return file;
 }
+
+// ----------------------------------------------------- match history --------
+function parseCSVLine(line) {
+  const vals = [];
+  let cur = '', inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuote = !inQuote;
+    } else if (c === ',' && !inQuote) {
+      vals.push(cur); cur = '';
+    } else cur += c;
+  }
+  vals.push(cur);
+  return vals;
+}
+
+function readMatchesFromCSV() {
+  const file = path.join(app.getPath('documents'), 'RiftReplay', 'matches.csv');
+  if (!fs.existsSync(file)) return [];
+  const lines = fs.readFileSync(file, 'utf8').split('\n')
+    .map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const vals = parseCSVLine(line);
+    const row = {};
+    headers.forEach((h, i) => { row[h] = vals[i] ?? ''; });
+    return row;
+  });
+}
+
+function getMatchHistory() {
+  const rows = readMatchesFromCSV();
+  const matchMap = new Map();
+  for (const row of rows) {
+    if (!matchMap.has(row.match_id)) matchMap.set(row.match_id, []);
+    matchMap.get(row.match_id).push(row);
+  }
+  const matches = [...matchMap.values()].map(games => ({
+    id: games[0].match_id,
+    games: games.sort((a, b) => parseInt(a.game_no) - parseInt(b.game_no))
+  }));
+  // Most recent match first (by timestamp of the last game in the match).
+  matches.sort((a, b) => {
+    const ta = a.games[a.games.length - 1]?.timestamp || '';
+    const tb = b.games[b.games.length - 1]?.timestamp || '';
+    return tb.localeCompare(ta);
+  });
+  return matches;
+}
+
+function deleteMatchFromCSV(matchId) {
+  const file = path.join(app.getPath('documents'), 'RiftReplay', 'matches.csv');
+  if (!fs.existsSync(file)) return;
+  const lines = fs.readFileSync(file, 'utf8').split('\n')
+    .map(l => l.trim()).filter(Boolean);
+  if (lines.length < 1) return;
+  const headers = parseCSVLine(lines[0]);
+  const idIdx = headers.indexOf('match_id');
+  const kept = lines.slice(1).filter(line =>
+    idIdx < 0 || parseCSVLine(line)[idIdx] !== matchId
+  );
+  fs.writeFileSync(file, [lines[0], ...kept].join('\n') + '\n');
+}
+
+function openMatchHistory() {
+  if (historyWin && !historyWin.isDestroyed()) { historyWin.focus(); return; }
+  historyWin = new BrowserWindow({
+    width: 740,
+    height: 640,
+    title: 'Match History — RiftReplay',
+    backgroundColor: '#0d1017',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'history-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  historyWin.setMenuBarVisibility(false);
+  historyWin.loadFile(path.join(__dirname, '..', 'overlay', 'history.html'));
+  historyWin.on('closed', () => { historyWin = null; });
+}
+
+ipcMain.on('open-match-history', openMatchHistory);
+ipcMain.handle('get-match-history', () => getMatchHistory());
+ipcMain.handle('delete-match', (_e, matchId) => {
+  deleteMatchFromCSV(matchId);
+  return getMatchHistory();
+});
+
+// ----------------------------------------------------- deck stats -----------
+function openStatsWindow() {
+  if (statsWin && !statsWin.isDestroyed()) { statsWin.focus(); return; }
+  statsWin = new BrowserWindow({
+    width: 860,
+    height: 720,
+    title: 'Deck Stats — RiftReplay',
+    backgroundColor: '#0d1017',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'stats-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  statsWin.setMenuBarVisibility(false);
+  statsWin.loadFile(path.join(__dirname, '..', 'overlay', 'stats.html'));
+  statsWin.on('closed', () => { statsWin = null; });
+}
+
+ipcMain.on('open-stats', openStatsWindow);
+ipcMain.handle('get-deck-stats', () => readMatchesFromCSV());
+
+// ------------------------------------------------- community / Supabase -----
+function getOrCreateDeviceId() {
+  const file = path.join(app.getPath('userData'), 'device.json');
+  try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); if (d.deviceId) return d.deviceId; } catch {}
+  const deviceId = randomUUID();
+  fs.writeFileSync(file, JSON.stringify({ deviceId }));
+  return deviceId;
+}
+
+function readSyncState() {
+  try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'sync.json'), 'utf8')); } catch {}
+  return { optedIn: false, uploadedCount: 0, lastSync: null };
+}
+function writeSyncState(s) {
+  fs.writeFileSync(path.join(app.getPath('userData'), 'sync.json'), JSON.stringify(s));
+}
+
+async function doSubmitStats() {
+  const rows = readMatchesFromCSV();
+  if (!rows.length) return { uploaded: 0 };
+  const deviceId = getOrCreateDeviceId();
+
+  const records = rows.map(r => ({
+    device_id:            deviceId,
+    timestamp:            r.timestamp            || null,
+    match_id:             r.match_id             || null,
+    game_no:              r.game_no   !== '' ? parseInt(r.game_no)  : null,
+    match_complete:       r.match_complete        || null,
+    result:               r.result                || null,
+    format:               r.format                || null,
+    seat:                 r.seat                  || null,
+    who_went_first:       r.who_went_first        || null,
+    opponent:             r.opponent              || null,
+    my_score:             r.my_score  !== '' ? parseInt(r.my_score)  : null,
+    opp_score:            r.opp_score !== '' ? parseInt(r.opp_score) : null,
+    my_legend:            r.my_legend            || null,
+    opp_legend:           r.opp_legend           || null,
+    my_battlefield:       r.my_battlefield       || null,
+    opp_battlefield:      r.opp_battlefield      || null,
+    baron_pit:            r.baron_pit            || null,
+    brush:                r.brush                || null,
+    deck:                 r.deck                 || null,
+    deck_name:            r.deck_name            || null,
+    took_mulligan:        r.took_mulligan        || null,
+    mulligan_cards:       r.mulligan_cards       || null,
+    turns:                r.turns !== '' ? parseInt(r.turns) : null,
+    sideboard_cards_drawn: r.sideboard_cards_drawn || null
+    // cards_drawn excluded — too large for community upload
+  }));
+
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/matches`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal'
+    },
+    body: JSON.stringify(records)
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Upload failed (${res.status}): ${body.slice(0, 200)}`);
+  }
+
+  const sync = readSyncState();
+  sync.optedIn = true;
+  sync.uploadedCount = records.length;
+  sync.lastSync = new Date().toISOString();
+  writeSyncState(sync);
+  return { uploaded: records.length };
+}
+
+async function doFetchCommunity() {
+  const cols = [
+    'device_id','result','format','who_went_first',
+    'my_legend','opp_legend','my_battlefield','took_mulligan',
+    'turns','sideboard_cards_drawn','deck','deck_name'
+  ].join(',');
+
+  let all = [], from = 0;
+  const PAGE = 1000;
+  while (true) {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/matches?select=${cols}&order=submitted_at.desc`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          'Range-Unit': 'items',
+          Range: `${from}-${from + PAGE - 1}`
+        }
+      }
+    );
+    if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if (batch.length < PAGE) break;
+    from += PAGE;
+    if (from >= 100_000) break; // safety cap
+  }
+  return { games: all, deviceId: getOrCreateDeviceId() };
+}
+
+ipcMain.handle('get-sync-state',         () => readSyncState());
+ipcMain.handle('submit-community-stats', async () => {
+  try { return await doSubmitStats(); }
+  catch (e) { return { error: String(e) }; }
+});
+ipcMain.handle('get-community-stats', async () => {
+  try { return await doFetchCommunity(); }
+  catch (e) { return { error: String(e) }; }
+});
 
 // Relay every tracker event from the game page to the overlay.
 ipcMain.on('tracker-event', (_evt, payload) => {
