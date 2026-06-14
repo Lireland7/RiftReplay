@@ -672,15 +672,36 @@ function collectGameData() {
     const mySec = document.querySelector('.player-section.current-player') || sections[0] || null;
     const oppSec = sections.find(s => s !== mySec) || null;
 
+    // "who went first": if firstStarter's name appears in the current-player section's
+    // text content (username label, avatar tooltip, etc.) → Me; in opp section → Opponent.
+    let wentFirst = 'Unknown';
+    if (firstStarter) {
+      const myText = mySec ? (mySec.innerText || '') : '';
+      const oppText = oppSec ? (oppSec.innerText || '') : '';
+      if (myText.includes(firstStarter)) wentFirst = 'Me';
+      else if (oppText.includes(firstStarter)) wentFirst = 'Opponent';
+    }
+
+    // Opponent's battlefield: first Battlefields card NOT inside my own section.
+    let oppBattlefield = nameOfCardIn(oppSec, '.game-card.Battlefields.card-hidden-no');
+    if (!oppBattlefield) {
+      for (const el of document.querySelectorAll('.game-card.Battlefields.card-hidden-no')) {
+        if (mySec && mySec.contains(el)) continue;
+        const id = cardIdFromEl(el);
+        if (id) { oppBattlefield = cardNameFromId(id); break; }
+      }
+    }
+
     data = {
-      myLegend: nameOfCardIn(mySec, '.game-card.Legend.card-hidden-no') ||
-                nameOfCardIn(mySec, '.game-card.Chosen_Champion.card-hidden-no') ||
+      // Prefer Chosen_Champion (the specific deck identity) then Legend on board, then DB snapshot.
+      myLegend: nameOfCardIn(mySec, '.game-card.Chosen_Champion.card-hidden-no') ||
+                nameOfCardIn(mySec, '.game-card.Legend.card-hidden-no') ||
                 state.champion || '',
-      oppLegend: nameOfCardIn(oppSec, '.game-card.Legend.card-hidden-no') ||
-                 nameOfCardIn(oppSec, '.game-card.Chosen_Champion.card-hidden-no') || '',
+      oppLegend: nameOfCardIn(oppSec, '.game-card.Chosen_Champion.card-hidden-no') ||
+                 nameOfCardIn(oppSec, '.game-card.Legend.card-hidden-no') || '',
       myBattlefield: nameOfCardIn(mySec, '.game-card.Battlefields.card-hidden-no'),
-      oppBattlefield: nameOfCardIn(oppSec, '.game-card.Battlefields.card-hidden-no'),
-      wentFirst: 'Unknown',     // refined once we map firstStarter → Me/Opponent
+      oppBattlefield,
+      wentFirst,
       deck: state.champion || '',
       deckName: '',
       _debug: gatherGameDebug(mySec, oppSec, sections)
@@ -694,6 +715,17 @@ function collectGameData() {
 // Rich dump so the remaining fields (opponent legend, battlefields split, scores,
 // player names, result) can be wired to precise selectors. Written to disk by main.
 function gatherGameDebug(mySec, oppSec, sections) {
+  const COUNTER_SEL = [
+    '[class*="counter" i]', '[class*="player-info" i]', '[class*="score" i]',
+    '[class*="point" i]', '[class*="life" i]', '[class*="health" i]',
+    '[class*="hp" i]', '[class*="star" i]'
+  ].join(', ');
+  const NAME_SEL = [
+    '[class*="player-name" i]', '[class*="username" i]', '[class*="pseudo" i]',
+    '[class*="nickname" i]', '[class*="handle" i]', '[class*="avatar" i]',
+    '[class*="profile" i]'
+  ].join(', ');
+
   const dumpSection = (sec) => {
     if (!sec) return null;
     const cardsByZone = {};
@@ -703,17 +735,36 @@ function gatherGameDebug(mySec, oppSec, sections) {
       const id = cardIdFromEl(el);
       (cardsByZone[zone] = cardsByZone[zone] || []).push(id ? cardNameFromId(id) : null);
     }
-    const counters = [...sec.querySelectorAll('[class*="counter" i], [class*="player-info" i], [class*="score" i]')]
+    const counters = [...sec.querySelectorAll(COUNTER_SEL)]
       .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').slice(0, 40) }))
-      .filter(x => x.text).slice(0, 12);
-    return { cls: (typeof sec.className === 'string' ? sec.className : '').slice(0, 80), cardsByZone, counters };
+      .filter(x => x.text).slice(0, 20);
+    // Player name label candidates (short text nodes in name/user/profile elements).
+    const nameLabels = [...sec.querySelectorAll(NAME_SEL)]
+      .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 60) }))
+      .filter(x => x.text && x.text.length < 40).slice(0, 8);
+    // All short leaf-node texts that could be a username (1–20 chars, no spaces or 1 word).
+    const leafTexts = [...sec.querySelectorAll('*')]
+      .filter(e => e.children.length === 0)
+      .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 40) }))
+      .filter(x => x.text && x.text.length >= 3 && x.text.length <= 24 && !/^\d+$/.test(x.text))
+      .slice(0, 20);
+    return { cls: (typeof sec.className === 'string' ? sec.className : '').slice(0, 80), cardsByZone, counters, nameLabels, leafTexts };
   };
+
+  // Also search for player names in the page header/nav (global username display).
+  const globalNameEls = [...document.querySelectorAll(NAME_SEL)]
+    .filter(e => !mySec?.contains(e) && !oppSec?.contains(e))
+    .map(e => ({ cls: (typeof e.className === 'string' ? e.className : '').slice(0, 60), text: (e.innerText || '').trim().slice(0, 60) }))
+    .filter(x => x.text && x.text.length < 40).slice(0, 6);
+
   return {
     ts: new Date().toISOString(),
     firstStarter,
     sectionCount: sections.length,
+    allSectionClasses: sections.map(s => (typeof s.className === 'string' ? s.className : '').slice(0, 80)),
     mySection: dumpSection(mySec),
     oppSection: dumpSection(oppSec),
+    globalNameEls,
     allBattlefields: [...document.querySelectorAll('.game-card.Battlefields')].map(el => {
       const id = cardIdFromEl(el);
       return { cls: (typeof el.className === 'string' ? el.className : '').slice(0, 70), name: id ? cardNameFromId(id) : null };
