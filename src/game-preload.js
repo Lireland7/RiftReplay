@@ -36,6 +36,9 @@ const state = {
   // once the deck cycles down to the bottom). Each layer: { named: [name,...],
   // anonymous: <count of unknown copies> }.
   recycledLayers: [],
+  // Cards removed from the game ("banished") — gone from the deck permanently.
+  // Flat list of names in removal order; shown in its own overlay section.
+  removedCards: [],
   // Per-game stats tracking (reset on new game, sent via collectGameData).
   drawnCards: [],         // card name each time a draw is recorded (may repeat)
   tookMulligan: false,    // true if player mulliganed away ≥1 card
@@ -227,6 +230,7 @@ function resetGameState() {
   state.sideboard = new Map();
   state.champion = null;
   state.recycledLayers = [];
+  state.removedCards = [];
   state.deckSnapshotTaken = false;
   state.drawnCards = [];
   state.tookMulligan = false;
@@ -527,7 +531,7 @@ function isMyHistoryLine(text) {
   const lname = localPlayerName.toLowerCase();
   if (lower.startsWith(lname + ' ') || lower.startsWith(lname + '\n')) return true;
   // Lines beginning with a bare verb have no player prefix → treat as ours.
-  if (/^(you\s|sent\s|put\s|drew\s|played\s|looked\s|mulliganed\s|has\s)/i.test(text)) return true;
+  if (/^(you\s|sent\s|put\s|drew\s|played\s|looked\s|mulliganed\s|has\s|removed\s)/i.test(text)) return true;
   return false; // non-empty name prefix that isn't ours → opponent's action
 }
 
@@ -662,6 +666,19 @@ function handleHistoryAddition(node) {
       if (lastDeckCount !== null) promoteSurfacedLayers(lastDeckCount);
       resetScry();
       emit('recycled-update', { ...recycledPayload(), raw: text });
+    }
+  } else if ((m = text.match(/(?:^|\n)removed (.+?)\s*$/i))) {
+    if (myAction) {
+      // Card removed from the game ("banished"). Strip a trailing "from <zone>"
+      // clause if the game ever adds one; store the bare name for display.
+      const name = m[1].replace(/\s+from\b.*$/i, '').trim();
+      // A scry "remove" pulls the card off the top of the deck, so it also leaves
+      // the scry strip — clear it from the pending-draw queue so it isn't counted
+      // as a draw on the next deck-count drop.
+      const ai = scryActionedPending.indexOf(name);
+      if (ai >= 0) scryActionedPending.splice(ai, 1);
+      state.removedCards.push(name);
+      emit('removed-update', { removed: tally(state.removedCards), total: state.removedCards.length, raw: text });
     }
   } else if ((m = text.match(/drew (\d+)/i))) {
     emit('log-drew', { count: parseInt(m[1], 10), raw: text });

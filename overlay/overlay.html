@@ -101,6 +101,10 @@
   .row.recycled .name { color: #e0984b; }
   .row.recycled .count b { color: #e0984b; }
   .row.recycled .name.unknown { font-style: italic; color: var(--dim); }
+  /* Removed-from-game ("banished") section — distinct muted red, struck feel. */
+  .section-head.removed-head { color: #b85c5c; }
+  .row.removed-row .name { color: #c77; }
+  .row.removed-row .count b { color: #c77; }
   .layer-note {
     padding: 4px 14px 2px;
     font-size: 9px;
@@ -110,6 +114,16 @@
   }
   /* Cards grouped in one randomized layer share a left rail. */
   .row.in-layer { border-left: 2px solid rgba(224,152,75,0.45); padding-left: 12px; }
+  /* Compact name list for large layers — wraps naturally in the narrow overlay. */
+  .layer-cards {
+    border-left: 2px solid rgba(224,152,75,0.45);
+    margin: 1px 14px 4px 14px;
+    padding: 4px 0 4px 12px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #e0984b;
+  }
+  .layer-cards .unknown { font-style: italic; color: var(--dim); }
   .bar { height: 2px; margin-top: 4px; background: #232838; border-radius: 1px; overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--bar); transition: width .25s ease; }
   .bar i.low { background: var(--bar-low); }
@@ -150,6 +164,8 @@
   let recycledLayers = [];
   let recycled = new Map();
   let recycledAnonymous = 0;
+  // Cards removed from the game ("banished") — [{name,count}], display-only.
+  let removed = [];
   // Authoritative remaining count read from the game's own ".deck" UI. This is
   // the source of truth for "in deck" — the per-card Map is only the breakdown,
   // and can lag when a drawn card isn't individually identified.
@@ -190,6 +206,14 @@
     recycledLayers = p?.layers ?? [];
     recycled = new Map((p?.named ?? []).map(r => [r.name, r.count]));
     recycledAnonymous = p?.anonymous ?? 0;
+  }
+
+  // Apply a removed payload from the game: { removed:[{name,count}], total }.
+  function applyRemoved(p) {
+    removed = p?.removed ?? [];
+  }
+  function totalRemoved() {
+    return removed.reduce((s, c) => s + c.count, 0);
   }
 
   function render(flashName) {
@@ -242,32 +266,58 @@
         </div>`);
       recycledLayers.forEach((layer, i) => {
         const size = (layer.named ?? []).reduce((s, c) => s + c.count, 0) + (layer.anonymous || 0);
-        // Multi-card layers are randomized — label them so the order is clear.
-        if (size > 1) {
+        const sorted = (layer.named ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+
+        if (size <= 2) {
+          // Small layer — use the existing per-row layout with count + arrow.
+          if (size > 1) rows.push(`<div class="layer-note">Layer ${i + 1} · random order</div>`);
+          const cls = size > 1 ? 'row recycled in-layer' : 'row recycled';
+          for (const c of sorted) {
+            rows.push(`
+              <div class="${cls}">
+                <div class="line">
+                  <span class="name">${esc(c.name)}</span>
+                  <span class="count"><b>${c.count}</b></span>
+                  <span class="odds">↓</span>
+                </div>
+              </div>`);
+          }
+          if (layer.anonymous > 0) {
+            rows.push(`
+              <div class="${cls}">
+                <div class="line">
+                  <span class="name unknown">Unknown ×${layer.anonymous}</span>
+                  <span class="odds">↓</span>
+                </div>
+              </div>`);
+          }
+        } else {
+          // Large randomised layer — compact wrapping list, much easier to read.
           rows.push(`<div class="layer-note">Layer ${i + 1} · ${size} cards, random order</div>`);
-        }
-        const cls = size > 1 ? 'row recycled in-layer' : 'row recycled';
-        for (const c of (layer.named ?? []).slice().sort((a, b) => a.name.localeCompare(b.name))) {
-          rows.push(`
-            <div class="${cls}">
-              <div class="line">
-                <span class="name">${esc(c.name)}</span>
-                <span class="count"><b>${c.count}</b></span>
-                <span class="odds">↓</span>
-              </div>
-            </div>`);
-        }
-        if (layer.anonymous > 0) {
-          rows.push(`
-            <div class="${cls}">
-              <div class="line">
-                <span class="name unknown">Unknown</span>
-                <span class="count"><b>${layer.anonymous}</b></span>
-                <span class="odds">↓</span>
-              </div>
-            </div>`);
+          const names = sorted.flatMap(c => Array(c.count).fill(c.name));
+          if (layer.anonymous > 0) names.push(`<span class="unknown">Unknown ×${layer.anonymous}</span>`);
+          rows.push(`<div class="layer-cards">${names.map(n => typeof n === 'string' && !n.startsWith('<') ? esc(n) : n).join(' · ')}</div>`);
         }
       });
+    }
+
+    // Removed-from-game section: cards banished out of the deck/board entirely.
+    // Display-only — these are gone, so no odds or draw math.
+    const removedTotal = totalRemoved();
+    if (removedTotal > 0) {
+      rows.push(`
+        <div class="section-head removed-head">
+          <span>Removed from game</span><span class="count">${removedTotal}</span>
+        </div>`);
+      for (const c of removed.slice().sort((a, b) => a.name.localeCompare(b.name))) {
+        rows.push(`
+          <div class="row removed-row">
+            <div class="line">
+              <span class="name">⊘ ${esc(c.name)}</span>
+              ${c.count > 1 ? `<span class="count"><b>${c.count}</b></span>` : ''}
+            </div>
+          </div>`);
+      }
     }
 
     $('cards').innerHTML = rows.join('') || '<div id="waiting">No deck loaded yet.</div>';
@@ -278,6 +328,7 @@
       case 'deck-snapshot': {
         deck = new Map(evt.data.deck.map(c => [c.name, { total: c.total, drawn: c.drawn }]));
         applyRecycle(null);
+        applyRemoved(null);
         gameRemaining = null; // will be set by the next deck-count event
         $('champion').textContent = evt.data.champion
           ? `Champion: ${evt.data.champion}` : 'Deck loaded';
@@ -299,6 +350,11 @@
       }
       case 'recycle-cleared': {
         applyRecycle(null);
+        render();
+        break;
+      }
+      case 'removed-update': {
+        applyRemoved(evt.data);
         render();
         break;
       }

@@ -497,7 +497,20 @@ ipcMain.on('tracker-event', (_evt, payload) => {
   }
   // Mirror to terminal for debugging
   console.log('[tracker]', JSON.stringify(payload).slice(0, 300));
+  appendTrackerLog(payload);
 });
+
+// Persist every tracker event to Documents/RiftReplay/tracker-log.txt so raw
+// history lines (log-* events carry the game's exact wording in `raw`) survive
+// a packaged run where stdout is discarded. Used to discover new log formats.
+function appendTrackerLog(payload) {
+  try {
+    const dir = path.join(app.getPath('documents'), 'RiftReplay');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const line = `${new Date().toISOString()} ${JSON.stringify(payload)}\n`;
+    fs.appendFileSync(path.join(dir, 'tracker-log.txt'), line);
+  } catch { /* logging must never break the tracker */ }
+}
 
 app.whenReady().then(() => {
   // The tracker is read-only; the remote page never needs device permissions.
