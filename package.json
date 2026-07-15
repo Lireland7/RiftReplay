@@ -29,10 +29,13 @@
       "repo": "RiftReplay"
     },
     "win": {
-      "target": ["portable"]
+      "target": ["nsis"]
     },
-    "portable": {
-      "artifactName": "RiftReplay-${version}-portable.exe"
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "RiftReplay-Setup-${version}.exe"
     }
   },
   "dependencies": {
