@@ -178,6 +178,9 @@ function openRecordForm() {
 
 ipcMain.on('open-record-form', openRecordForm);
 ipcMain.on('game-data', (_e, detected) => showRecordForm(detected));
+// Auto-prompt: the tracker detected a game end (opponent disconnect or a new game
+// starting) and sends the ended game's cached snapshot to prefill the form.
+ipcMain.on('game-ended', (_e, detected) => showRecordForm(detected || {}));
 ipcMain.on('record-form-ready', () => {
   if (recordWin && !recordWin.isDestroyed() && pendingPrefill) {
     recordWin.webContents.send('prefill', pendingPrefill);

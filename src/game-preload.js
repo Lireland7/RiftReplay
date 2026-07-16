@@ -244,6 +244,9 @@ function resetGameState() {
   mulliganSelectedNames = [];
   firstStarter = null;
   localPlayerName = null; // re-detect for the new game (opponent may differ)
+  recentHistoryText.clear(); // fresh log for the new game
+  lastGameSnapshot = null;   // snapshot belonged to the previous game
+  gameEndPrompted = false;   // the new game can prompt when it ends
   resetScry();
 }
 
@@ -292,8 +295,10 @@ function trySnapshotDeck(node) {
   }
   if (container === sideboardContainer) return; // already tracking this popup
 
-  // A fresh popup after a deck was already loaded means a new game began.
-  if (state.deckSnapshotTaken) resetGameState();
+  // A fresh popup after a deck was already loaded means a new game began — so the
+  // previous game just ended. Prompt to record it (using the cached final state)
+  // before wiping everything for the new game.
+  if (state.deckSnapshotTaken) { promptRecordForEndedGame(); resetGameState(); }
   sideboardContainer = container;
   snapshotFrom(container);
 }
@@ -596,16 +601,47 @@ function syncHand() {
 // --------------------------------------------------------- history log -----
 // Verified element: <div class="history"> — receives lines like
 // "Snackmuncher - 03:56 PM", "drew 4", "played Fury Rune from their runes deck".
-// Dedup by NODE identity (not text): the same event fires once, but two distinct
-// events with identical text (e.g. recycling the same card twice across scries)
-// must both be processed.
+//
+// React churns this subtree: one logical log line briefly renders as SEVERAL
+// distinct nodes (e.g. bare "mulliganed 1 card" before the "Name - time" prefix
+// resolves), and some lines arrive as in-place text mutations that never show up
+// as addedNodes at all. So we can't rely on node identity or addedNodes alone:
+//   • node WeakSet — skip a node we've already read (persistent lines re-polled).
+//   • short-window text dedup — collapse the transient multi-node re-renders of
+//     one line, WITHOUT dropping a genuinely repeated action seconds later
+//     (e.g. "looked at the top 3 cards" fires once per scry).
+// History is parsed by a per-batch poll (syncHistory), not addedNodes, so a line
+// is caught however React materialises it.
 const seenHistoryNodes = new WeakSet();
+const recentHistoryText = new Map(); // normalized line text -> last processed ms
+const HISTORY_DEDUP_MS = 1500;
+
+// Drop the "Name - HH:MM PM" prefix (and collapse whitespace) so a line renders
+// to the same key whether it's the bare or the fully-prefixed transient form.
+function normalizeHistoryText(text) {
+  return text.replace(/^.*?\d{1,2}:\d{2}\s*[ap]m\s*/is, '')
+             .replace(/\s+/g, ' ').trim().toLowerCase();
+}
 
 function handleHistoryAddition(node) {
   if (seenHistoryNodes.has(node)) return;
-  seenHistoryNodes.add(node);
   const text = (node.innerText || node.textContent || '').trim();
-  if (!text) return;
+  if (!text) return;              // not rendered yet — don't burn the node, retry next batch
+  seenHistoryNodes.add(node);
+
+  // Collapse React's transient re-renders of this same line.
+  const norm = normalizeHistoryText(text);
+  const now = Date.now();
+  const last = recentHistoryText.get(norm);
+  if (last !== undefined && now - last < HISTORY_DEDUP_MS) return;
+  recentHistoryText.set(norm, now);
+
+  // Opponent disconnect ends the game — one of the two end signals (the other is
+  // a new game starting). Prompt to record the just-ended game.
+  if (/connection lost with /i.test(text)) {
+    promptRecordForEndedGame();
+    return;
+  }
 
   // Record who took the first turn, and track turn count for the local player.
   // "X starting turn N" is the authoritative signal — reliably attributed by name,
@@ -704,6 +740,46 @@ function handleHistoryAddition(node) {
   }
 }
 
+// Per-batch poll of the history log. React reuses/re-renders nodes and some lines
+// arrive as in-place text mutations, so addedNodes miss them; re-reading the live
+// list each batch (idempotent via the dedup in handleHistoryAddition) catches
+// every line exactly once. Entries are the children of whichever descendant of
+// .history holds the most children — i.e. the scrolling list container.
+function syncHistory() {
+  const hist = document.querySelector('.history');
+  if (!hist) return;
+  let listEl = hist, max = hist.childElementCount;
+  for (const el of hist.querySelectorAll('*')) {
+    if (el.childElementCount > max) { max = el.childElementCount; listEl = el; }
+  }
+  for (const el of listEl.children) handleHistoryAddition(el);
+}
+
+// --------------------------------------------------- game-end auto-prompt ---
+// There is no victory/defeat screen: a game ends either when the opponent
+// disconnects ("Connection lost with <name>") or when a new game starts (a fresh
+// sideboard popup). On either, we open the record form for the just-ended game.
+// The board may be torn down by then, so we cache the last valid in-game snapshot
+// each tick and prompt with that rather than the live (possibly empty) DOM.
+let lastGameSnapshot = null;   // most recent collectGameData() while a game was up
+let gameEndPrompted = false;   // guard so one ended game prompts at most once
+
+function cacheGameSnapshot() {
+  if (!state.deckSnapshotTaken) return;
+  if (!document.querySelector('.player-section')) return; // board not present
+  try { lastGameSnapshot = collectGameData(); } catch (_) {}
+}
+
+// Fire the record prompt for the game that just ended. Only when a real game was
+// in progress (deck loaded and at least some play happened), and once per game.
+function promptRecordForEndedGame() {
+  if (gameEndPrompted || !state.deckSnapshotTaken) return;
+  if (state.turnCount === 0 && state.drawnCards.length === 0) return; // nothing played
+  gameEndPrompted = true;
+  const data = lastGameSnapshot || (() => { try { return collectGameData(); } catch { return {}; } })();
+  ipcRenderer.send('game-ended', data);
+}
+
 // ------------------------------------------------------------ observers ----
 function startObservers() {
   // One observer on <body>: cheap enough at this DOM size (~100s of nodes),
@@ -712,21 +788,22 @@ function startObservers() {
     for (const mut of muts) {
       for (const node of mut.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
-
-        // 1. Deck popup snapshot (also detects a new game and resets)
+        // Deck popup snapshot (also detects a new game and resets).
         trySnapshotDeck(node);
-
-        // 2. History log lines
+        // History lines that arrive as freshly-inserted nodes (fast path). The
+        // syncHistory poll below is the backup for lines React mutates in place;
+        // content dedup keeps the two sources from double-counting.
         if (node.closest?.('.history') || node.classList?.contains('history')) {
           handleHistoryAddition(node);
         }
       }
     }
-    // Reconcile the open popups/zones and re-read the deck counter. All cheap and
-    // idempotent, so we run them on every batch — removals and React node-reuse
-    // don't reliably show up in addedNodes.
+    // Reconcile the open popups/zones, history log, and deck counter. All cheap
+    // and idempotent, so we run them on every batch — removals, history lines,
+    // and React node-reuse don't reliably show up in addedNodes.
     syncSideboard();
     syncScry();
+    syncHistory();
     checkDeckCounter();
     syncHand();
     syncMulligan();
@@ -738,7 +815,8 @@ function startObservers() {
   // Also lazily detect the local player name (only appears after a game loads).
   setInterval(() => {
     if (!localPlayerName) localPlayerName = detectLocalPlayerName();
-    checkDeckCounter(); syncHand(); syncMulligan();
+    syncHistory(); checkDeckCounter(); syncHand(); syncMulligan();
+    cacheGameSnapshot();
   }, 1000);
   emit('observer-started', {});
 }
