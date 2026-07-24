@@ -43,6 +43,8 @@ const state = {
   drawnCards: [],         // card name each time a draw is recorded (may repeat)
   tookMulligan: false,    // true if player mulliganed away ≥1 card
   mulliganCardNames: [],  // names of cards sent to bottom during mulligan
+  openingHand: [],        // full opening hand from the mulligan screen (kept + mulliganed)
+  playedCards: [],        // "Name@turnPlayed@turnsHeld" per card played from hand
   turnCount: 0,           // approximate number of turns taken (post-opening-hand draws)
   openingHandDone: false  // set after the first "drew N" log entry
 };
@@ -235,6 +237,9 @@ function resetGameState() {
   state.drawnCards = [];
   state.tookMulligan = false;
   state.mulliganCardNames = [];
+  state.openingHand = [];
+  state.playedCards = [];
+  drawTurnQueue = new Map();
   state.turnCount = 0;
   state.openingHandDone = false;
   lastDeckCount = null;
@@ -247,6 +252,7 @@ function resetGameState() {
   recentHistoryText.clear(); // fresh log for the new game
   lastGameSnapshot = null;   // snapshot belonged to the previous game
   gameEndPrompted = false;   // the new game can prompt when it ends
+  lastBoardFrame = '';       // force a fresh board frame for the new game
   resetScry();
 }
 
@@ -465,10 +471,24 @@ function checkDeckCounter() {
   lastDeckCount = count;
 }
 
+// FIFO of the turn each drawn copy entered hand, per card name, so we can compute
+// "turns held" when a copy is later played. Reset per game.
+let drawTurnQueue = new Map();
+function pushDrawTurn(name) {
+  const q = drawTurnQueue.get(name) || [];
+  q.push(state.turnCount || 1);
+  drawTurnQueue.set(name, q);
+}
+function takeDrawTurn(name) {
+  const q = drawTurnQueue.get(name);
+  return (q && q.length) ? q.shift() : null;
+}
+
 function markDrawn(id, name, source) {
   const entry = state.deck.get(name);
   if (entry && entry.drawn < entry.total) entry.drawn += 1;
   state.drawnCards.push(name);
+  pushDrawTurn(name);
   emit('card-drawn', {
     id, name, source,
     remaining: entry ? entry.total - entry.drawn : null
@@ -541,15 +561,21 @@ function isMyHistoryLine(text) {
 }
 
 function syncMulligan() {
-  if (!document.querySelector('.mulligan-section')) return; // screen not up — keep last
-  const names = [];
-  for (const w of document.querySelectorAll('.mulligan-section .wrapper.selected')) {
+  const sec = document.querySelector('.mulligan-section');
+  if (!sec) return; // screen not up — keep last
+  const selected = [], hand = [];
+  for (const w of sec.querySelectorAll('.wrapper')) {
     const id = cardIdFromEl(w);
     if (!id) continue;
     const name = cardNameFromId(id);
-    if (state.deck.has(name)) names.push(name);
+    if (!state.deck.has(name)) continue;
+    hand.push(name);
+    if (w.classList.contains('selected')) selected.push(name);
   }
-  mulliganSelectedNames = names;
+  mulliganSelectedNames = selected;
+  // Full opening hand (kept + mulliganed-away). Kept = hand − mulliganed, computed
+  // at collectGameData. Guard against transient empty renders overwriting it.
+  if (hand.length) state.openingHand = hand;
 }
 
 function deckTotalCount() {
@@ -588,6 +614,7 @@ function syncHand() {
       if (!entry || entry.drawn >= entry.total) break; // this card maxed out
       entry.drawn += 1;
       state.drawnCards.push(name);
+      pushDrawTurn(name);
       emit('card-drawn', {
         id: null, name, source: 'hand',
         remaining: entry.total - entry.drawn
@@ -636,9 +663,10 @@ function handleHistoryAddition(node) {
   if (last !== undefined && now - last < HISTORY_DEDUP_MS) return;
   recentHistoryText.set(norm, now);
 
-  // Opponent disconnect ends the game — one of the two end signals (the other is
-  // a new game starting). Prompt to record the just-ended game.
-  if (/connection lost with /i.test(text)) {
+  // A game ends when the opponent leaves — several message forms seen:
+  // "Connection lost with X", "X has left the game voluntarily", "X has left the
+  // game". (The other end signal is a new game starting.) Prompt to record it.
+  if (/(connection lost with |has left the game|has conceded|has forfeited)/i.test(text)) {
     promptRecordForEndedGame();
     return;
   }
@@ -719,7 +747,16 @@ function handleHistoryAddition(node) {
   } else if ((m = text.match(/drew (\d+)/i))) {
     emit('log-drew', { count: parseInt(m[1], 10), raw: text });
   } else if ((m = text.match(/played (.+?) from/i))) {
-    emit('log-played', { card: m[1], raw: text });
+    const card = m[1];
+    // Record my plays of deck cards (skip runes/tokens) with the turn played and
+    // turns held (playTurn − drawTurn) for per-card stats.
+    if (myAction && state.deck.has(card)) {
+      const turn = state.turnCount || 1;
+      const dt = takeDrawTurn(card);
+      const held = dt != null ? Math.max(0, turn - dt) : '';
+      state.playedCards.push(`${card}@${turn}` + (held !== '' ? `@${held}` : ''));
+    }
+    emit('log-played', { card, raw: text });
   } else if ((m = text.match(/mulliganed (\d+) cards?/i))) {
     if (myAction) {
       // Mulligan confirmed. Cards toggled "selected" on the mulligan screen are
@@ -770,6 +807,43 @@ function cacheGameSnapshot() {
   try { lastGameSnapshot = collectGameData(); } catch (_) {}
 }
 
+// ------------------------------------------------------ replay board frames ---
+// Compact snapshot of the visible board for later replay. We store card IDs +
+// zone + owner + face + position (NOT pixels), so one frame is a few hundred
+// bytes; the replay viewer draws each card with art fetched from the CDN. Emitted
+// only when the board actually changes (deduped by a stringified key), so a whole
+// game is a few hundred small frames. Hidden info (opponent hand, face-down cards)
+// is captured as id:null — the tracker never saw those, so replay can't show them.
+let lastBoardFrame = '';
+function syncBoardReplay() {
+  if (!state.deckSnapshotTaken) return;
+  const sections = [...document.querySelectorAll('.player-section')];
+  if (!sections.length) return;
+  const mySec = document.querySelector('.player-section.current-player') || sections[0] || null;
+
+  const cards = [];
+  for (const el of document.querySelectorAll('.game-card')) {
+    const cls = typeof el.className === 'string' ? el.className : '';
+    const zone = (cls.match(/game-card (\w+)/) || [])[1] || '?';
+    const id = cardIdFromEl(el);
+    const owner = mySec && mySec.contains(el) ? 0 : 1;       // 0 = me, 1 = opponent
+    const face = /card-hidden-no/.test(cls) ? 1 : 0;         // 1 = face-up
+    const tapped = /\btapped\b/.test(cls) ? 1 : 0;
+    const idx = parseInt((cls.match(/(?:^| )index-(\d+)/) || [])[1] ?? '', 10);
+    const c = { z: zone, id: id || null, o: owner, f: face };
+    if (tapped) c.t = 1;
+    if (Number.isInteger(idx)) c.i = idx;
+    cards.push(c);
+  }
+  cards.sort((a, b) => (a.o - b.o) || (a.z < b.z ? -1 : a.z > b.z ? 1 : 0) ||
+                       ((a.i ?? 0) - (b.i ?? 0)) || String(a.id).localeCompare(String(b.id)));
+
+  const key = JSON.stringify(cards);
+  if (key === lastBoardFrame) return;   // no visible change — skip
+  lastBoardFrame = key;
+  emit('board-frame', { turn: state.turnCount, cards });
+}
+
 // Fire the record prompt for the game that just ended. Only when a real game was
 // in progress (deck loaded and at least some play happened), and once per game.
 function promptRecordForEndedGame() {
@@ -807,6 +881,7 @@ function startObservers() {
     checkDeckCounter();
     syncHand();
     syncMulligan();
+    syncBoardReplay();
   });
 
   obs.observe(document.body, { childList: true, subtree: true });
@@ -816,7 +891,7 @@ function startObservers() {
   setInterval(() => {
     if (!localPlayerName) localPlayerName = detectLocalPlayerName();
     syncHistory(); checkDeckCounter(); syncHand(); syncMulligan();
-    cacheGameSnapshot();
+    cacheGameSnapshot(); syncBoardReplay();
   }, 1000);
   emit('observer-started', {});
 }
@@ -909,6 +984,9 @@ function collectGameData() {
       deckName: '',
       tookMulligan: state.tookMulligan,
       mulliganCards: state.mulliganCardNames.join('|'),
+      // Kept opening-hand cards = full opening hand minus the ones mulliganed away.
+      keptCards: multisetSubtract(state.openingHand, state.mulliganCardNames).join('|'),
+      playedCards: state.playedCards.join('|'),
       turns: state.turnCount > 0 ? state.turnCount : '',
       cardsDrawn: state.drawnCards.join('|'),
       sideboardCardsDrawn: state.drawnCards.filter(n => state.sideboard.has(n) && !state.deck.has(n)).join('|'),
