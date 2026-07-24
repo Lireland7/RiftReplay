@@ -444,6 +444,7 @@
     const mullCards  = cardWR(games, 'mulligan_cards');
     const keptCards  = cardWR(games, 'kept_cards');
     const drawnCards = cardWR(games, 'cards_drawn');
+    const sbCards    = cardWR(sbGs, 'sideboard_cards_drawn'); // G2–3 only
 
     const bfHtml = bfGroups.slice(0,5).map(([k,gs]) => {
       const bw=winsOf(gs),bl=lossesOf(gs),bt=gs.length,bp=pct(bw,bt),bc=wrColor(bp);
@@ -460,7 +461,7 @@
         </div>
         <div class="stat-card"><h3>Going First W/R</h3>${splitRows([['First',firstGs],['Second',secondGs]])}</div>
         <div class="stat-card"><h3>Battlefield W/R</h3>${bfHtml}</div>
-        <div class="stat-card"><h3>Mulligan W/R</h3>${splitRows([['Mulliganed',mulGs],['Kept hand',keptGs]])}</div>
+        <div class="stat-card"><h3>Mulligan Decision W/R</h3>${splitRows([['Mulliganed',mulGs],['Kept hand',keptGs]])}</div>
         <div class="stat-card">
           <h3>Average Turns</h3>
           <div style="margin-bottom:8px"><span class="turns-val">${atAll??'—'}</span><span class="turns-sub"> all games</span></div>
@@ -469,9 +470,10 @@
         </div>
         <div class="stat-card"><h3>Sideboard Draw Impact <span style="color:var(--dim);font-weight:400;font-size:10px">(G2–3)</span></h3>${sbGs.length ? splitRows([['Drew SB card',sbYes],['No SB card',sbNo]]) : '<span style="color:var(--dim);font-size:12px">No post-sideboard games yet</span>'}</div>
       </div>
+      ${cardTableHtml('Mulligan W/R (per card — kept in opening hand)', keptCards)}
       ${cardTableHtml('Mulligan Away W/R (per card)', mullCards)}
-      ${cardTableHtml('Opening Hand Kept W/R (per card)', keptCards)}
-      ${cardTableHtml('Drawn W/R', drawnCards)}`;
+      ${cardTableHtml('Drawn W/R (per card)', drawnCards)}
+      ${cardTableHtml('Sideboard Card Drawn W/R (per card, G2–3)', sbCards)}`;
   }
 
   function buildMyLegendBreakdownHtml(games) {
@@ -565,7 +567,7 @@
     return `<p class="section-title">Card Stats</p>
       <div class="card-grid">
         <div class="cg-head">
-          <span>Card</span><span>Kept WR</span><span>Kept %</span><span>Drawn WR</span><span>Played WR</span><span>Held</span><span>Turn</span>
+          <span>Card</span><span>Mulligan WR</span><span>Kept %</span><span>Drawn WR</span><span>Played WR</span><span>Held</span><span>Turn</span>
         </div>
         ${rows}
       </div>`;
