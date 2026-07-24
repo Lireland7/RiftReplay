@@ -41,6 +41,35 @@
   }
   input:focus, select:focus { border-color: var(--accent-2); }
   select { appearance: none; cursor: pointer; }
+
+  /* legend image combobox */
+  .legend-combo { position: relative; }
+  .lc-btn {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--field); border: 1px solid var(--field-border); border-radius: 6px;
+    color: var(--ink); padding: 6px 10px; font: inherit; cursor: pointer; text-align: left;
+  }
+  .lc-btn:hover { border-color: var(--accent-2); }
+  .lc-sel { display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; }
+  .lc-placeholder { color: var(--dim); }
+  .lc-caret { color: var(--dim); flex: 0 0 auto; }
+  .lc-img {
+    flex: 0 0 auto; width: 30px; height: 22px; border-radius: 3px;
+    background-size: cover; background-position: center 16%; background-color: #10151f;
+  }
+  .lc-noimg { background: #10151f; }
+  .lc-menu {
+    position: absolute; z-index: 20; top: calc(100% + 3px); left: 0; right: 0;
+    background: var(--panel); border: 1px solid var(--field-border); border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5); padding: 6px; max-height: 280px; display: flex; flex-direction: column;
+  }
+  .lc-search { margin-bottom: 6px; padding: 7px 9px; }
+  .lc-list { overflow-y: auto; }
+  .lc-opt {
+    width: 100%; display: flex; align-items: center; gap: 8px; padding: 4px 6px;
+    background: none; border: none; color: var(--ink); font: inherit; cursor: pointer; border-radius: 4px; text-align: left;
+  }
+  .lc-opt:hover { background: var(--field); }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .extra-row { display: flex; gap: 10px; align-items: center; }
   .chk {
@@ -113,12 +142,26 @@
     </div>
 
     <div class="field">
-      <label for="myLegend">My legend</label>
-      <input id="myLegend" type="text" placeholder="e.g. Pyke">
+      <label>My legend</label>
+      <div class="legend-combo" id="combo-myLegend">
+        <input id="myLegend" type="hidden">
+        <button type="button" class="lc-btn"><span class="lc-sel lc-placeholder">Select legend…</span><span class="lc-caret">▾</span></button>
+        <div class="lc-menu" hidden>
+          <input type="text" class="lc-search" placeholder="Search legends…">
+          <div class="lc-list"></div>
+        </div>
+      </div>
     </div>
     <div class="field">
-      <label for="oppLegend">Opponent legend</label>
-      <input id="oppLegend" type="text" placeholder="e.g. Diana">
+      <label>Opponent legend</label>
+      <div class="legend-combo" id="combo-oppLegend">
+        <input id="oppLegend" type="hidden">
+        <button type="button" class="lc-btn"><span class="lc-sel lc-placeholder">Select legend…</span><span class="lc-caret">▾</span></button>
+        <div class="lc-menu" hidden>
+          <input type="text" class="lc-search" placeholder="Search legends…">
+          <div class="lc-list"></div>
+        </div>
+      </div>
     </div>
 
     <div class="field">
@@ -161,8 +204,10 @@
 
     <!-- Hidden passthrough fields (auto-detected, not user-editable) -->
     <input type="hidden" id="mulliganCards">
+    <input type="hidden" id="keptCards">
     <input type="hidden" id="cardsDrawn">
     <input type="hidden" id="sideboardCardsDrawn">
+    <input type="hidden" id="playedCards">
   </div>
 
   <footer>
@@ -175,7 +220,7 @@
   const $ = id => document.getElementById(id);
   const fields = ['result','format','seat','opponent','myScore','oppScore',
     'wentFirst','myLegend','oppLegend','myBattlefield','oppBattlefield',
-    'deck','deckName','turns','mulliganCards','cardsDrawn','sideboardCardsDrawn'];
+    'deck','deckName','turns','mulliganCards','keptCards','cardsDrawn','sideboardCardsDrawn','playedCards'];
 
   function setVal(id, v) {
     if (v === undefined || v === null || v === '') return;
@@ -183,8 +228,84 @@
     if (el) el.value = v;
   }
 
+  /* ─── legend image comboboxes ─── */
+  const CARD_DB_URL = 'https://russeus.github.io/RB-TCG-Arena/Riftbound-CardList.json';
+  let LEGENDS = [];
+  const escH = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const comboIds = ['combo-myLegend', 'combo-oppLegend'];
+  const comboEls = cid => {
+    const root = $(cid);
+    return { root, input: root.querySelector('input'), btn: root.querySelector('.lc-btn'),
+             sel: root.querySelector('.lc-sel'), menu: root.querySelector('.lc-menu'),
+             search: root.querySelector('.lc-search'), list: root.querySelector('.lc-list') };
+  };
+  const imgSpan = url => url ? `<span class="lc-img" style="background-image:url('${url.replace(/'/g,'')}')"></span>` : '<span class="lc-img lc-noimg"></span>';
+
+  // Fold Unit champion forms / art variants onto the champion's Legend card, by
+  // the champion name (text before the first comma). So "Viktor, Leader" (a Unit)
+  // resolves to the "Viktor, ..." Legend option.
+  const champKey = n => String(n || '').split(',')[0].trim().toLowerCase();
+  function canonLegendName(name) {
+    if (!name) return name;
+    const l = LEGENDS.find(x => champKey(x.name) === champKey(name));
+    return l ? l.name : name;
+  }
+  function setCombo(cid, name) {
+    name = canonLegendName(name);
+    const e = comboEls(cid);
+    e.input.value = name || '';
+    if (!name) { e.sel.className = 'lc-sel lc-placeholder'; e.sel.textContent = 'Select legend…'; return; }
+    const l = LEGENDS.find(x => x.name === name);
+    e.sel.className = 'lc-sel';
+    e.sel.innerHTML = `${imgSpan(l && l.img)}<span>${escH(name)}</span>`;
+  }
+  function buildComboList(cid) {
+    comboEls(cid).list.innerHTML = LEGENDS.map(l =>
+      `<button type="button" class="lc-opt" data-name="${escH(l.name)}">${imgSpan(l.img)}<span>${escH(l.name)}</span></button>`
+    ).join('');
+  }
+  function filterList(cid, q) {
+    q = q.toLowerCase();
+    for (const opt of comboEls(cid).list.children)
+      opt.style.display = opt.dataset.name.toLowerCase().includes(q) ? '' : 'none';
+  }
+  const closeMenus = () => document.querySelectorAll('.lc-menu').forEach(m => m.hidden = true);
+  function initCombo(cid) {
+    const e = comboEls(cid);
+    e.btn.onclick = () => {
+      const wasOpen = !e.menu.hidden; closeMenus();
+      if (!wasOpen) { e.menu.hidden = false; e.search.value = ''; filterList(cid, ''); e.search.focus(); }
+    };
+    e.search.oninput = () => filterList(cid, e.search.value);
+    e.list.onclick = ev => { const b = ev.target.closest('.lc-opt'); if (!b) return; setCombo(cid, b.dataset.name); e.menu.hidden = true; };
+  }
+  const syncCombos = () => comboIds.forEach(cid => setCombo(cid, comboEls(cid).input.value));
+  document.addEventListener('click', e => { if (!e.target.closest('.legend-combo')) closeMenus(); });
+
+  async function loadLegends() {
+    try {
+      const db = await (await fetch(CARD_DB_URL)).json();
+      const seen = new Set();
+      for (const id in db) {
+        const c = db[id];
+        if ((c.type || '') !== 'Legend') continue;
+        const name = c.name && c.name.en;
+        if (!name || seen.has(name)) continue;
+        const imgs = c.face && c.face.front && c.face.front.image;
+        seen.add(name);
+        LEGENDS.push({ name, img: (imgs && (imgs.en || Object.values(imgs)[0])) || '' });
+      }
+      LEGENDS.sort((a, b) => a.name.localeCompare(b.name));
+      comboIds.forEach(buildComboList);
+      syncCombos(); // now that images are available
+    } catch (_) { /* dropdown still works with typed/detected value */ }
+  }
+  comboIds.forEach(initCombo);
+  loadLegends();
+
   window.recordForm.onPrefill(data => {
     for (const f of fields) setVal(f, data[f]);
+    syncCombos(); // reflect auto-detected legends in the image dropdowns
     if (data.baronPit) $('baronPit').checked = true;
     if (data.brush) $('brush').checked = true;
     if (data.tookMulligan) $('tookMulligan').checked = true;

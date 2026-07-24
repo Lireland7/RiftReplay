@@ -85,6 +85,64 @@
   .ct-wr { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
   .more-note { color: var(--dim); font-size: 11px; padding: 6px 14px; border-top: 1px solid rgba(255,255,255,.04); }
 
+  /* per-card stats grid */
+  .card-grid { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .cg-head, .cg-row {
+    display: grid; grid-template-columns: minmax(150px,1.6fr) 84px 60px 84px 84px 54px 54px;
+    gap: 8px; align-items: center; padding: 4px 12px;
+  }
+  .cg-head { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); background: rgba(0,0,0,.2); }
+  .cg-row { font-size: 12px; border-top: 1px solid rgba(255,255,255,.04); font-variant-numeric: tabular-nums; }
+  .cg-row > span:not(.cg-name) { text-align: right; }
+  .cg-name { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+  .cg-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cg-cnt { flex: 0 0 auto; color: var(--dim); font-size: 11px; width: 12px; text-align: right; }
+  .cg-art {
+    flex: 0 0 auto; width: 34px; height: 24px; border-radius: 3px;
+    background-size: cover; background-position: center 18%; background-color: #10151f;
+  }
+  .cg-noart { background: repeating-linear-gradient(45deg,#141a24,#141a24 4px,#10151f 4px,#10151f 8px); }
+  .cg-n { color: var(--dim); font-size: 10px; margin-left: 4px; }
+  .cg-mut { color: var(--ink); }
+
+  /* decklist panel */
+  .decklist { display: grid; grid-template-columns: repeat(auto-fill,minmax(190px,1fr)); gap: 4px; margin-bottom: 10px; }
+  .dl-card {
+    display: flex; align-items: center; gap: 8px; padding: 3px 8px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px; font-size: 12px;
+  }
+  .dl-card .cg-art { width: 30px; height: 22px; }
+  .dl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-cnt { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* deck change history */
+  .deck-history { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .ch-row { display: grid; grid-template-columns: 120px 1fr; gap: 10px; padding: 7px 14px; border-top: 1px solid rgba(255,255,255,.04); font-size: 12px; }
+  .ch-row:first-child { border-top: none; }
+  .ch-date { color: var(--dim); font-size: 11px; }
+  .ch-changes { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .ch-add { color: #4ccf8f; }
+  .ch-rem { color: #e0705f; }
+
+  /* legend icons + matchup matrix */
+  .lg-ico { display: inline-block; flex: 0 0 auto; border-radius: 4px; background-size: cover; background-position: center 16%; background-color: #10151f; vertical-align: middle; }
+  .lg-noico { display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: var(--dim); background: #141a24; }
+  .matrix-wrap { overflow-x: auto; margin-bottom: 10px; }
+  .matrix { display: inline-block; min-width: 100%; }
+  .mx-row { display: grid; grid-template-columns: 150px repeat(var(--cols), 40px); align-items: center; }
+  .mx-head { position: sticky; top: 0; }
+  .mx-corner { color: var(--dim); text-align: center; }
+  .mx-colh { display: flex; justify-content: center; padding: 3px 0; }
+  .mx-rowh { display: flex; align-items: center; gap: 6px; overflow: hidden; padding: 2px 6px 2px 0; }
+  .mx-rowname { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mx-cell {
+    height: 34px; margin: 1px; border-radius: 3px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .mx-empty { color: #2c3444; font-weight: 400; }
+  .mx-n { font-size: 8px; font-weight: 400; opacity: .7; }
+
   /* legend table */
   .legend-table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .lt-head {
@@ -208,6 +266,55 @@
   let currentDeck    = '';
   let communityLoaded = false;
   let syncState      = { optedIn: false, uploadedCount: 0, lastSync: null };
+  let deckLibrary    = {};          // champion -> { champion, versions:[{date,cards:[{name,count}]}] }
+  let cardArt        = new Map();   // card name -> art image URL
+  let cardCost       = new Map();   // card name -> mana cost
+  let legendByChamp  = new Map();   // champion key -> { name, img } of the Legend card
+
+  // A champion has one Legend card ("Viktor, Herald of the Arcane") plus Unit forms
+  // ("Viktor, Leader"). They're the same legend, so we canonicalize any legend/champion
+  // name to its Legend card by the champion (text before the first comma).
+  function championKey(name) { return String(name || '').split(',')[0].trim().toLowerCase(); }
+  function canonLegend(name) {
+    const rep = legendByChamp.get(championKey(name));
+    return rep ? rep.name : (name || '');
+  }
+  function canonLegendImg(name) {
+    const rep = legendByChamp.get(championKey(name));
+    return (rep && rep.img) || cardArt.get(canonLegend(name)) || cardArt.get(name) || '';
+  }
+
+  const CARD_DB_URL = 'https://russeus.github.io/RB-TCG-Arena/Riftbound-CardList.json';
+  async function loadCardArt() {
+    try {
+      const db = await (await fetch(CARD_DB_URL)).json();
+      for (const id in db) {
+        const c = db[id]; const name = c && c.name && c.name.en;
+        if (!name) continue;
+        const imgs = c.face && c.face.front && c.face.front.image;
+        const img = imgs && (imgs.en || Object.values(imgs)[0]);
+        if (img && !cardArt.has(name)) cardArt.set(name, img);
+        if (c.cost != null && !cardCost.has(name)) cardCost.set(name, c.cost);
+        if ((c.type || '') === 'Legend') {
+          const k = championKey(name);
+          if (!legendByChamp.has(k)) legendByChamp.set(k, { name, img: img || '' });
+        }
+      }
+      render(); // re-render with art + legend canonicalization once loaded
+    } catch (_) { /* art is optional — grid still renders with names */ }
+  }
+
+  function championOf(deckId) {
+    const g = allGames.find(x => getDeckId(x) === deckId);
+    return g ? (g.deck || '') : '';
+  }
+  function parsePlayed(str) {
+    return (str || '').split('|').filter(Boolean).map(s => {
+      const [name, turn, held] = s.split('@');
+      return { name, turn: turn != null && turn !== '' ? parseInt(turn) : null,
+                     held: held != null && held !== '' ? parseInt(held) : null };
+    });
+  }
 
   /* ─── utils ─── */
   function esc(s) {
@@ -267,6 +374,9 @@
   }
 
   /* ─── data helpers ─── */
+  // Sideboard-draw stats only apply from game 2 on — there is no sideboarding in
+  // game 1 of a match, so those games would wrongly count as "no SB card".
+  function sideboardGames(games) { return games.filter(g => parseInt(g.game_no, 10) >= 2); }
   function filteredGames()          { return currentDeck ? allGames.filter(g => getDeckId(g) === currentDeck) : allGames; }
   function filteredCommunityGames() {
     if (!currentDeck) return communityGames;
@@ -327,10 +437,12 @@
     const atWin  = avgOf(games.filter(g => g.result==='Win').map(g => g.turns ? parseInt(g.turns) : null));
     const atLoss = avgOf(games.filter(g => g.result==='Loss').map(g => g.turns ? parseInt(g.turns) : null));
 
-    const sbYes = games.filter(g => parseList(g.sideboard_cards_drawn).length > 0);
-    const sbNo  = games.filter(g => parseList(g.sideboard_cards_drawn).length === 0);
+    const sbGs  = sideboardGames(games); // exclude game 1 (no sideboarding)
+    const sbYes = sbGs.filter(g => parseList(g.sideboard_cards_drawn).length > 0);
+    const sbNo  = sbGs.filter(g => parseList(g.sideboard_cards_drawn).length === 0);
 
     const mullCards  = cardWR(games, 'mulligan_cards');
+    const keptCards  = cardWR(games, 'kept_cards');
     const drawnCards = cardWR(games, 'cards_drawn');
 
     const bfHtml = bfGroups.slice(0,5).map(([k,gs]) => {
@@ -355,9 +467,10 @@
           <div class="split-row"><span class="split-label">Wins</span><span class="split-right" style="color:var(--win)">${atWin??'—'}</span></div>
           <div class="split-row"><span class="split-label">Losses</span><span class="split-right" style="color:var(--loss)">${atLoss??'—'}</span></div>
         </div>
-        <div class="stat-card"><h3>Sideboard Draw Impact</h3>${splitRows([['Drew SB card',sbYes],['No SB card',sbNo]])}</div>
+        <div class="stat-card"><h3>Sideboard Draw Impact <span style="color:var(--dim);font-weight:400;font-size:10px">(G2–3)</span></h3>${sbGs.length ? splitRows([['Drew SB card',sbYes],['No SB card',sbNo]]) : '<span style="color:var(--dim);font-size:12px">No post-sideboard games yet</span>'}</div>
       </div>
-      ${cardTableHtml('Mulligan Away W/R', mullCards)}
+      ${cardTableHtml('Mulligan Away W/R (per card)', mullCards)}
+      ${cardTableHtml('Opening Hand Kept W/R (per card)', keptCards)}
       ${cardTableHtml('Drawn W/R', drawnCards)}`;
   }
 
@@ -393,14 +506,167 @@
       </div>`;
   }
 
+  /* ─── per-deck detail: decklist, change history, per-card grid ─── */
+  function buildCardStats(games) {
+    const stat = new Map();
+    const get = n => {
+      if (!stat.has(n)) stat.set(n, { keptW:0,keptT:0, mullT:0, drawnW:0,drawnT:0, playedW:0,playedT:0, heldSum:0,heldN:0, turnSum:0,turnN:0 });
+      return stat.get(n);
+    };
+    for (const g of games) {
+      const win = g.result === 'Win';
+      for (const n of new Set(parseList(g.kept_cards)))     { const s=get(n); s.keptT++; if(win)s.keptW++; }
+      for (const n of new Set(parseList(g.mulligan_cards))) { get(n).mullT++; }
+      for (const n of new Set(parseList(g.cards_drawn)))    { const s=get(n); s.drawnT++; if(win)s.drawnW++; }
+      const played = parsePlayed(g.played_cards);
+      for (const n of new Set(played.map(p=>p.name)))       { const s=get(n); s.playedT++; if(win)s.playedW++; }
+      for (const p of played) { const s=get(p.name); if(p.turn!=null){s.turnSum+=p.turn;s.turnN++;} if(p.held!=null){s.heldSum+=p.held;s.heldN++;} }
+    }
+    return stat;
+  }
+  function deckCardList(champion) {
+    const rec = deckLibrary[champion];
+    return (rec && rec.versions.length) ? rec.versions[rec.versions.length-1].cards : null;
+  }
+  function artCell(name) {
+    const img = cardArt.get(name);
+    return img ? `<span class="cg-art" style="background-image:url('${img.replace(/'/g, '')}')"></span>`
+               : '<span class="cg-art cg-noart"></span>';
+  }
+  function wrCell(w, t) {
+    return `<span style="color:${wrColor(pct(w,t))}">${wrStr(w,t)}</span><span class="cg-n">${t||0}</span>`;
+  }
+
+  function buildPerCardGrid(games) {
+    const stat = buildCardStats(games);
+    const list = deckCardList(championOf(currentDeck));
+    let names = list ? list.map(c => c.name) : [...stat.keys()];
+    names = [...new Set(names)].sort((a,b) => (cardCost.get(a)??99)-(cardCost.get(b)??99) || a.localeCompare(b));
+    if (!names.length) return '';
+    const countOf = list ? new Map(list.map(c=>[c.name,c.count])) : null;
+
+    const rows = names.map(n => {
+      const s = stat.get(n) || {keptW:0,keptT:0,mullT:0,drawnW:0,drawnT:0,playedW:0,playedT:0,heldSum:0,heldN:0,turnSum:0,turnN:0};
+      const keptRate = (s.keptT+s.mullT) ? Math.round(s.keptT/(s.keptT+s.mullT)*100)+'%' : '—';
+      const held = s.heldN ? (s.heldSum/s.heldN).toFixed(1) : '—';
+      const tp   = s.turnN ? (s.turnSum/s.turnN).toFixed(1) : '—';
+      const cnt  = countOf ? (countOf.get(n)||0) : '';
+      return `<div class="cg-row">
+        <span class="cg-name">${cnt!=='' ? `<span class="cg-cnt">${cnt}</span>`:''}${artCell(n)}<span class="cg-title">${esc(n)}</span></span>
+        <span>${wrCell(s.keptW,s.keptT)}</span>
+        <span class="cg-mut">${keptRate}</span>
+        <span>${wrCell(s.drawnW,s.drawnT)}</span>
+        <span>${wrCell(s.playedW,s.playedT)}</span>
+        <span class="cg-mut">${held}</span>
+        <span class="cg-mut">${tp}</span>
+      </div>`;
+    }).join('');
+
+    return `<p class="section-title">Card Stats</p>
+      <div class="card-grid">
+        <div class="cg-head">
+          <span>Card</span><span>Kept WR</span><span>Kept %</span><span>Drawn WR</span><span>Played WR</span><span>Held</span><span>Turn</span>
+        </div>
+        ${rows}
+      </div>`;
+  }
+
+  function buildDecklistPanel(champion) {
+    const cards = deckCardList(champion);
+    if (!cards) return '';
+    const total = cards.reduce((s,c)=>s+c.count,0);
+    const sorted = cards.slice().sort((a,b)=>(cardCost.get(a.name)??99)-(cardCost.get(b.name)??99)||a.name.localeCompare(b.name));
+    const items = sorted.map(c => `<div class="dl-card">${artCell(c.name)}<span class="dl-name">${esc(c.name)}</span><span class="dl-cnt">×${c.count}</span></div>`).join('');
+    return `<p class="section-title">Decklist <span style="color:var(--dim);font-weight:400;font-size:11px">${total} cards</span></p>
+      <div class="decklist">${items}</div>`;
+  }
+
+  function multisetDiff(fromCards, toCards) {
+    const a = new Map((fromCards||[]).map(c=>[c.name,c.count]));
+    const b = new Map((toCards||[]).map(c=>[c.name,c.count]));
+    const added = [], removed = [];
+    for (const [n,cnt] of b) { const d = cnt-(a.get(n)||0); if (d>0) added.push({name:n,count:d}); }
+    for (const [n,cnt] of a) { const d = cnt-(b.get(n)||0); if (d>0) removed.push({name:n,count:d}); }
+    return { added, removed };
+  }
+  function buildDeckHistory(champion) {
+    const rec = deckLibrary[champion];
+    if (!rec || rec.versions.length < 2) return '';
+    const rows = [];
+    for (let i = rec.versions.length-1; i >= 1; i--) {
+      const diff = multisetDiff(rec.versions[i-1].cards, rec.versions[i].cards);
+      if (!diff.added.length && !diff.removed.length) continue;
+      const date = new Date(rec.versions[i].date).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+      const plus  = diff.added.map(c=>`<span class="ch-add">+${c.count>1?c.count+' ':''}${esc(c.name)}</span>`).join('');
+      const minus = diff.removed.map(c=>`<span class="ch-rem">−${c.count>1?c.count+' ':''}${esc(c.name)}</span>`).join('');
+      rows.push(`<div class="ch-row"><div class="ch-date">${date}</div><div class="ch-changes">${plus}${minus}</div></div>`);
+    }
+    return rows.length ? `<p class="section-title">Deck Changes</p><div class="deck-history">${rows.join('')}</div>` : '';
+  }
+
   function renderDeckStats(games) {
-    const extra = !currentDeck ? buildMyLegendBreakdownHtml(games) : '';
-    document.getElementById('tab-deck').innerHTML = buildDeckStatsHtml(games) + extra;
+    const host = document.getElementById('tab-deck');
+    if (!currentDeck) {
+      host.innerHTML = '<div id="empty">Select a deck above to view its stats.</div>';
+      return;
+    }
+    const champ = championOf(currentDeck);
+    host.innerHTML =
+      buildDeckStatsHtml(games) +
+      buildDecklistPanel(champ) +
+      buildDeckHistory(champ) +
+      buildPerCardGrid(games);
   }
 
   /* ─── LEGEND STATS ─── */
+  // Legend icon for axis headers/cells — the legend is a card, so its art is in
+  // cardArt. Falls back to a text abbreviation when art hasn't loaded.
+  function legendIcon(name, size) {
+    const canon = canonLegend(name);
+    const img = canonLegendImg(name);
+    const s = size || 30;
+    if (img) return `<span class="lg-ico" title="${esc(canon)}" style="width:${s}px;height:${s}px;background-image:url('${img.replace(/'/g,'')}')"></span>`;
+    const abbr = (canon || '?').replace(/[^A-Za-z ]/g,'').split(' ')[0].slice(0,3).toUpperCase();
+    return `<span class="lg-ico lg-noico" title="${esc(canon)}" style="width:${s}px;height:${s}px">${esc(abbr)}</span>`;
+  }
+
+  // Matchup matrix: my legends (rows) × opponent legends (columns), each cell the
+  // win rate of that pairing. Axis headers are legend images.
+  function buildLegendMatrix(games) {
+    const mine = [...new Set(games.map(g => canonLegend(g.my_legend)).filter(Boolean))].sort();
+    const opps = [...new Set(games.map(g => canonLegend(g.opp_legend)).filter(Boolean))].sort();
+    if (!mine.length || !opps.length) return '';
+
+    // Pair -> {w,l}
+    const cell = new Map();
+    for (const g of games) {
+      if (!g.my_legend || !g.opp_legend) continue;
+      const k = canonLegend(g.my_legend) + '||' + canonLegend(g.opp_legend); // was: '' + g.opp_legend;
+      const c = cell.get(k) || { w:0, l:0 };
+      if (g.result === 'Win') c.w++; else if (g.result === 'Loss') c.l++;
+      cell.set(k, c);
+    }
+
+    const head = `<div class="mx-row mx-head"><span class="mx-corner">▨</span>${
+      opps.map(o => `<span class="mx-colh">${legendIcon(o, 30)}</span>`).join('')}</div>`;
+
+    const body = mine.map(my => {
+      const cells = opps.map(op => {
+        const c = cell.get(my + '||' + op); // '' + op);
+        if (!c || (c.w + c.l) === 0) return `<span class="mx-cell mx-empty">·</span>`;
+        const t = c.w + c.l, p = pct(c.w, t);
+        return `<span class="mx-cell" title="${esc(my)} vs ${esc(op)}: ${c.w}–${c.l}"
+                  style="background:${wrColor(p)}22;color:${wrColor(p)}">${p}%<span class="mx-n">${t}</span></span>`;
+      }).join('');
+      return `<div class="mx-row"><span class="mx-rowh">${legendIcon(my, 30)}<span class="mx-rowname">${esc(my)}</span></span>${cells}</div>`;
+    }).join('');
+
+    return `<p class="section-title">Matchup Matrix <span style="color:var(--dim);font-weight:400;font-size:11px">your legend (row) vs opponent (column)</span></p>
+      <div class="matrix-wrap"><div class="matrix" style="--cols:${opps.length}">${head}${body}</div></div>`;
+  }
+
   function renderLegendStats(games) {
-    const legendMap = groupBy(games, g => g.opp_legend || 'Unknown');
+    const legendMap = groupBy(games, g => canonLegend(g.opp_legend) || 'Unknown');
     const legends = [...legendMap.entries()].sort((a,b) => b[1].length - a[1].length);
     if (!legends.length) { document.getElementById('tab-legend').innerHTML = '<div id="empty">No games recorded yet.</div>'; return; }
 
@@ -409,15 +675,16 @@
       const firstGs=gs.filter(g=>g.who_went_first==='Me');
       const secondGs=gs.filter(g=>g.who_went_first==='Opponent');
       const bfGroups=[...groupBy(gs,g=>g.my_battlefield||'').entries()].filter(([k])=>k&&k!=='Unknown').sort((a,b)=>b[1].length-a[1].length);
-      const sbYes=gs.filter(g=>parseList(g.sideboard_cards_drawn).length>0);
-      const sbNo=gs.filter(g=>parseList(g.sideboard_cards_drawn).length===0);
-      const sbCards=cardWR(gs,'sideboard_cards_drawn');
+      const sbGs=sideboardGames(gs); // exclude game 1 (no sideboarding)
+      const sbYes=sbGs.filter(g=>parseList(g.sideboard_cards_drawn).length>0);
+      const sbNo=sbGs.filter(g=>parseList(g.sideboard_cards_drawn).length===0);
+      const sbCards=cardWR(sbGs,'sideboard_cards_drawn');
       const fw=winsOf(firstGs),sw=winsOf(secondGs),sbyw=winsOf(sbYes),sbnw=winsOf(sbNo);
       const fp=pct(fw,firstGs.length),sp2=pct(sw,secondGs.length),sbYp=pct(sbyw,sbYes.length),sbNp=pct(sbnw,sbNo.length);
       return `
         <div class="lt-row-wrap">
           <div class="lt-row" onclick="toggleDetail('ld${idx}')">
-            <span class="lt-name">${esc(legend)}</span>
+            <span class="lt-name" style="display:flex;align-items:center;gap:6px">${legendIcon(legend,22)}${esc(legend)}</span>
             <span class="lt-rec">${recStr(w,l)}</span>
             <span class="lt-wr" style="color:${col}">${wrStr(w,t)}</span>
             <span class="lt-dim">First ${wrStr(fw,firstGs.length)} · 2nd ${wrStr(sw,secondGs.length)}</span>
@@ -446,6 +713,8 @@
     }).join('');
 
     document.getElementById('tab-legend').innerHTML = `
+      ${buildLegendMatrix(games)}
+      <p class="section-title">Vs Opponent Legend</p>
       <div class="legend-table">
         <div class="lt-head"><span>Opponent Legend</span><span>Record</span><span>WR</span><span>Seat</span><span>Sideboard</span></div>
         ${rows}
@@ -518,7 +787,7 @@
       ['Going Second', myGs.filter(g=>g.who_went_first==='Opponent'),  cGs.filter(g=>g.who_went_first==='Opponent')],
       ['Mulliganed',   myGs.filter(g=>g.took_mulligan==='yes'),        cGs.filter(g=>g.took_mulligan==='yes')],
       ['Kept Hand',    myGs.filter(g=>g.took_mulligan==='no'),         cGs.filter(g=>g.took_mulligan==='no')],
-      ['Drew SB Card', myGs.filter(g=>parseList(g.sideboard_cards_drawn).length>0), cGs.filter(g=>parseList(g.sideboard_cards_drawn).length>0)],
+      ['Drew SB Card (G2–3)', sideboardGames(myGs).filter(g=>parseList(g.sideboard_cards_drawn).length>0), sideboardGames(cGs).filter(g=>parseList(g.sideboard_cards_drawn).length>0)],
     ].map(([label, mg, cg]) => {
       const mw=winsOf(mg),mt=mg.length,cw=winsOf(cg),ct=cg.length;
       const mp=pct(mw,mt),cp2=pct(cw,ct);
@@ -583,7 +852,7 @@
   }
 
   function buildCommunityLegendHtml(cGs) {
-    const legendMap = groupBy(cGs, g => g.opp_legend || '');
+    const legendMap = groupBy(cGs, g => canonLegend(g.opp_legend) || '');
     const legends = [...legendMap.entries()]
       .filter(([k]) => k && k !== 'Unknown')
       .sort((a, b) => b[1].length - a[1].length);
@@ -652,12 +921,15 @@
 
   /* ─── init ─── */
   async function init() {
-    const [games, sync] = await Promise.all([
+    const [games, sync, library] = await Promise.all([
       window.deckStats.getGames(),
-      window.deckStats.getSyncState()
+      window.deckStats.getSyncState(),
+      window.deckStats.getDeckLibrary ? window.deckStats.getDeckLibrary() : {}
     ]);
     allGames   = games;
     syncState  = sync;
+    deckLibrary = library || {};
+    loadCardArt(); // non-blocking; re-renders when ready
 
     const decks = [...new Set(games.map(getDeckId).filter(d => d && d !== 'Unknown'))].sort();
     const sel = document.getElementById('deckSel');

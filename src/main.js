@@ -7,6 +7,7 @@
 const { app, BrowserWindow, ipcMain, screen, shell, session, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const { randomUUID } = require('crypto');
 const { autoUpdater } = require('electron-updater');
 
@@ -179,8 +180,12 @@ function openRecordForm() {
 ipcMain.on('open-record-form', openRecordForm);
 ipcMain.on('game-data', (_e, detected) => showRecordForm(detected));
 // Auto-prompt: the tracker detected a game end (opponent disconnect or a new game
-// starting) and sends the ended game's cached snapshot to prefill the form.
-ipcMain.on('game-ended', (_e, detected) => showRecordForm(detected || {}));
+// starting) and sends the ended game's cached snapshot to prefill the form. Also
+// finalize the replay recording for the just-ended game.
+ipcMain.on('game-ended', (_e, detected) => {
+  finalizeReplay();
+  showRecordForm(detected || {});
+});
 ipcMain.on('record-form-ready', () => {
   if (recordWin && !recordWin.isDestroyed() && pendingPrefill) {
     recordWin.webContents.send('prefill', pendingPrefill);
@@ -204,12 +209,31 @@ const CSV_HEADER = [
   'seat', 'who_went_first', 'opponent', 'my_score', 'opp_score', 'my_legend',
   'opp_legend', 'my_battlefield', 'opp_battlefield', 'baron_pit', 'brush',
   'deck', 'deck_name',
-  'took_mulligan', 'mulligan_cards', 'turns', 'cards_drawn', 'sideboard_cards_drawn'
+  'took_mulligan', 'mulligan_cards', 'turns', 'cards_drawn', 'sideboard_cards_drawn',
+  'kept_cards', 'played_cards'
 ];
 
 function csvEscape(v) {
   const s = String(v ?? '');
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// If the file's header line is missing newly-added (trailing) columns, replace
+// just the header line with the current CSV_HEADER. Existing data rows keep their
+// values; the reader pads the missing trailing cells to '' when it maps by name.
+function ensureCsvHeaderCurrent(file) {
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    const nl = text.indexOf('\n');
+    if (nl < 0) return;
+    const header = text.slice(0, nl).replace(/\r$/, '');
+    const want = CSV_HEADER.join(',');
+    if (header === want) return;
+    // Only safe-migrate the additive case: existing header is a prefix of the new one.
+    if (want.startsWith(header)) {
+      fs.writeFileSync(file, want + '\n' + text.slice(nl + 1));
+    }
+  } catch { /* leave the file as-is on any error */ }
 }
 
 function saveGameRow(data, action) {
@@ -238,12 +262,21 @@ function saveGameRow(data, action) {
     mulligan_cards: data.mulliganCards || '',
     turns: data.turns || '',
     cards_drawn: data.cardsDrawn || '',
-    sideboard_cards_drawn: data.sideboardCardsDrawn || ''
+    sideboard_cards_drawn: data.sideboardCardsDrawn || '',
+    kept_cards: data.keptCards || '',
+    played_cards: data.playedCards || ''
   };
+
+  // Migrate an older file whose header predates a column (e.g. kept_cards). New
+  // columns are always appended last, so old rows stay aligned — only the header
+  // line needs upgrading, and the reader pads missing trailing values to ''.
+  if (!newFile) ensureCsvHeaderCurrent(file);
 
   let out = newFile ? CSV_HEADER.join(',') + '\n' : '';
   out += CSV_HEADER.map(h => csvEscape(row[h])).join(',') + '\n';
   fs.appendFileSync(file, out);
+
+  commitDecklistVersion(); // snapshot this game's decklist into the deck library
 
   if (complete) {
     currentMatch = null;
@@ -377,6 +410,7 @@ function openStatsWindow() {
 
 ipcMain.on('open-stats', openStatsWindow);
 ipcMain.handle('get-deck-stats', () => readMatchesFromCSV());
+ipcMain.handle('get-deck-library', () => readDeckLibrary());
 
 // ------------------------------------------------- community / Supabase -----
 function getOrCreateDeviceId() {
@@ -501,7 +535,97 @@ ipcMain.on('tracker-event', (_evt, payload) => {
   // Mirror to terminal for debugging
   console.log('[tracker]', JSON.stringify(payload).slice(0, 300));
   appendTrackerLog(payload);
+  recordReplayEvent(payload);
+  if (payload.type === 'deck-snapshot') updateCurrentDecklist(payload.data);
 });
+
+// ─── deck library (decklists + version history) ──────────────────────────────
+// Persists each deck's decklist and, when it changes between games (sideboard /
+// deckbuilding), appends a new version — powering the decklist panel and the
+// +added / −removed card-history changelog. Keyed by champion (known at snapshot
+// time; the stats page maps a selected deck to its champion).
+let currentDecklist = null; // { champion, cards:[{name,count}] } — latest snapshot
+
+function updateCurrentDecklist(d) {
+  if (!d || !d.champion || !Array.isArray(d.deck) || !d.deck.length) return;
+  currentDecklist = {
+    champion: d.champion,
+    cards: d.deck.map(c => ({ name: c.name, count: c.total }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  };
+}
+
+function decksPath() { return path.join(app.getPath('documents'), 'RiftReplay', 'decks.json'); }
+function readDeckLibrary() { try { return JSON.parse(fs.readFileSync(decksPath(), 'utf8')); } catch { return {}; } }
+
+function cardsEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  const m = new Map(a.map(c => [c.name, c.count]));
+  return b.every(c => m.get(c.name) === c.count);
+}
+
+// Record the current decklist as a new version if it differs from the latest one
+// stored for its champion. Called when a game is saved (authoritative game event).
+function commitDecklistVersion() {
+  if (!currentDecklist) return;
+  try {
+    const lib = readDeckLibrary();
+    const champ = currentDecklist.champion;
+    const rec = lib[champ] || { champion: champ, versions: [] };
+    const latest = rec.versions[rec.versions.length - 1];
+    if (!cardsEqual(latest && latest.cards, currentDecklist.cards)) {
+      rec.versions.push({ date: new Date().toISOString(), cards: currentDecklist.cards });
+      lib[champ] = rec;
+      fs.mkdirSync(path.dirname(decksPath()), { recursive: true });
+      fs.writeFileSync(decksPath(), JSON.stringify(lib));
+    }
+  } catch (e) { console.error('[decks] commit failed', e); }
+}
+
+// ─── replay recorder ─────────────────────────────────────────────────────────
+// A replay is just the semantic event stream persisted per game — no pixels, no
+// DOM. The viewer reconstructs state (and draws card art from the CDN) from these
+// events, so files stay tiny (~KB gzipped). We record only state-changing events;
+// noise (chat/emoji log-other, bare log-drew) is dropped.
+const REPLAY_EVENTS = new Set([
+  'deck-snapshot', 'deck-count', 'card-drawn', 'recycled-update', 'removed-update',
+  'board-frame', 'log-played', 'log-drew-named', 'scry-started'
+]);
+let replay = null; // { start, meta, events: [] }
+
+function recordReplayEvent(payload) {
+  if (!payload || !payload.type) return;
+  if (payload.type === 'deck-snapshot') {
+    // A new game's snapshot arriving while a played-out game is still buffered
+    // means its end signal was missed — save it now before starting the new one.
+    if (replay && replay.events.some(e => e.y === 'board-frame')) finalizeReplay();
+    if (!replay) {
+      replay = { start: payload.ts || Date.now(), meta: { champion: payload.data?.champion || '', startedAt: new Date().toISOString() }, events: [] };
+    }
+  }
+  if (!replay || !REPLAY_EVENTS.has(payload.type)) return;
+  // Timestamps stored as ms-offset from game start to keep numbers small.
+  replay.events.push({ t: (payload.ts || Date.now()) - replay.start, y: payload.type, d: payload.data });
+}
+
+function finalizeReplay() {
+  const r = replay;
+  replay = null;
+  if (!r || !r.events.some(e => e.y === 'board-frame')) return; // nothing worth saving
+  try {
+    const dir = path.join(app.getPath('documents'), 'RiftReplay', 'replays');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const champ = (r.meta.champion || 'game').replace(/[^\w-]+/g, '_').slice(0, 30);
+    const header = JSON.stringify({ meta: r.meta, count: r.events.length });
+    const body = r.events.map(e => JSON.stringify(e)).join('\n');
+    const gz = zlib.gzipSync(Buffer.from(header + '\n' + body, 'utf8'));
+    const file = path.join(dir, `${stamp}_${champ}.rrz`);
+    fs.writeFileSync(file, gz);
+    const rawKb = (Buffer.byteLength(header + '\n' + body) / 1024).toFixed(1);
+    console.log(`[replay] saved ${file} — ${r.events.length} events, ${rawKb}KB raw, ${(gz.length / 1024).toFixed(1)}KB gzipped`);
+  } catch (e) { console.error('[replay] save failed', e); }
+}
 
 // Persist every tracker event to Documents/RiftReplay/tracker-log.txt so raw
 // history lines (log-* events carry the game's exact wording in `raw`) survive
@@ -529,5 +653,5 @@ app.whenReady().then(() => {
   autoUpdater.checkForUpdates().catch(() => {});
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { finalizeReplay(); globalShortcut.unregisterAll(); });
 app.on('window-all-closed', () => app.quit());
