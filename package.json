@@ -1,6 +1,6 @@
 {
   "name": "riftreplay",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Deck tracker overlay for Riftbound on tcg-arena.fr",
   "author": "RiftReplay",
   "main": "src/main.js",
